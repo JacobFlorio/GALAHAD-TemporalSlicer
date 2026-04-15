@@ -144,6 +144,127 @@ int main() {
         assert(all_window.size() == 5);
     }
 
-    std::cout << "test_engine: OK (with branching futures)\n";
+    // ---------- counterfactual queries: whyNot + explainWith ----------
+    //
+    // Build a small scenario with two competing projection branches, refute
+    // one of them, then verify:
+    //   - whyNot on the refuted branch's event returns the branch + the
+    //     would-have-been causal chain walked across refuted nodes
+    //   - whyNot on the non-refuted branch's event returns empty
+    //   - whyNot on an event that actually happened on main returns empty
+    //   - explainWith adds a hypothetical event and returns its ancestors
+    //     without mutating the real core
+    {
+        TemporalCore cf_core;
+        const auto t0 = Clock::now();
+
+        cf_core.addEvent({"gt_perceive", t0,         t0+ms(5),  t0,
+                          "perception", {{"obs","door_open"}}, {}});
+        cf_core.addEvent({"gt_infer",    t0+ms(5),   t0+ms(15), t0+ms(5),
+                          "inference",  {{"why","wind"}}, {"gt_perceive"}});
+        cf_core.addEvent({"gt_decide",   t0+ms(15),  t0+ms(20), t0+ms(15),
+                          "decision",   {{"choose","close"}}, {"gt_infer"}});
+
+        // Two projected futures depending on the real decide.
+        TemporalEvent fut_close;
+        fut_close.id = "fut_close";
+        fut_close.valid_from = t0+ms(20);
+        fut_close.valid_to   = t0+ms(30);
+        fut_close.recorded_at = t0+ms(15);
+        fut_close.type = "projected_action";
+        fut_close.data = {{"do","close"}};
+        fut_close.causal_links = {"gt_decide"};
+        fut_close.branch_id = "close_door";
+        fut_close.confidence = 0.7;
+        cf_core.addProjection(fut_close);
+
+        TemporalEvent fut_ignore = fut_close;
+        fut_ignore.id = "fut_ignore";
+        fut_ignore.branch_id = "ignore";
+        fut_ignore.confidence = 0.3;
+        fut_ignore.data = {{"do","wait"}};
+        cf_core.addProjection(fut_ignore);
+
+        // Reality unfolds: refute the ignore branch.
+        cf_core.refuteBranch("ignore");
+        cf_core.buildCausalGraph();
+
+        // whyNot on the refuted branch's event:
+        auto cfs = cf_core.whyNot("fut_ignore");
+        assert(cfs.size() == 1);
+        assert(cfs[0].branch == "ignore");
+        assert(cfs[0].hypothetical_event.id == "fut_ignore");
+        assert(cfs[0].hypothetical_event.data.at("do") == "wait");
+        // Would-have-been ancestors: gt_decide -> gt_infer -> gt_perceive.
+        // All are on main, not on a refuted branch, but the whyNot walk
+        // crosses branches so all three must be present.
+        assert(cfs[0].would_have_been_causes.size() == 3);
+        std::vector<std::string> got_ids;
+        for (const auto& c : cfs[0].would_have_been_causes) got_ids.push_back(c.id);
+        assert(std::find(got_ids.begin(), got_ids.end(), "gt_decide")   != got_ids.end());
+        assert(std::find(got_ids.begin(), got_ids.end(), "gt_infer")    != got_ids.end());
+        assert(std::find(got_ids.begin(), got_ids.end(), "gt_perceive") != got_ids.end());
+
+        // whyNot on the still-open projection branch: empty (not refuted).
+        auto cfs_close = cf_core.whyNot("fut_close");
+        assert(cfs_close.empty());
+
+        // whyNot on an event that actually happened on main: empty.
+        auto cfs_main = cf_core.whyNot("gt_decide");
+        assert(cfs_main.empty());
+
+        // whyNot on a non-existent event: empty.
+        auto cfs_none = cf_core.whyNot("never_existed");
+        assert(cfs_none.empty());
+
+        // ---- explainWith: hypothetical mutation, fork, query, discard ----
+        //
+        // Add a hypothetical "hyp_act" event that cites gt_decide as its
+        // cause. The real core does not contain hyp_act; explainWith
+        // should return the full causal chain (decide -> infer -> perceive)
+        // as if hyp_act existed, without mutating the real core.
+        TemporalEvent hyp;
+        hyp.id = "hyp_act";
+        hyp.valid_from = t0+ms(25);
+        hyp.valid_to   = t0+ms(35);
+        hyp.recorded_at = t0+ms(25);
+        hyp.type = "hypothetical_action";
+        hyp.data = {{"do","close"}};
+        hyp.causal_links = {"gt_decide"};
+
+        TemporalEngine engine_cf(cf_core);
+        auto hyp_exp = engine_cf.explainWith("hyp_act", hyp);
+        assert(hyp_exp.causes.size() == 3);
+        assert(hyp_exp.causes[0].id == "gt_perceive");
+        assert(hyp_exp.causes[1].id == "gt_infer");
+        assert(hyp_exp.causes[2].id == "gt_decide");
+
+        // The real core must be unchanged — hyp_act does not exist in it.
+        assert(!cf_core.get("hyp_act").has_value());
+
+        // And a normal explain on the real core returns empty for hyp_act
+        // (it genuinely isn't there).
+        auto real_exp = engine_cf.explain("hyp_act");
+        assert(real_exp.causes.empty());
+
+        // ---- clone: modifications on the clone must not affect origin ----
+        auto orig_size = cf_core.queryRange({t0, t0+ms(1000)}).size();
+        TemporalCore forked = cf_core.clone();
+        TemporalEvent extra;
+        extra.id = "only_in_fork";
+        extra.valid_from = t0+ms(50);
+        extra.valid_to   = t0+ms(55);
+        extra.recorded_at = t0+ms(50);
+        extra.type = "test";
+        forked.addEvent(extra);
+
+        // Fork has the extra event.
+        assert(forked.get("only_in_fork").has_value());
+        // Origin does not.
+        assert(!cf_core.get("only_in_fork").has_value());
+        assert(cf_core.queryRange({t0, t0+ms(1000)}).size() == orig_size);
+    }
+
+    std::cout << "test_engine: OK (counterfactual: whyNot + explainWith + clone)\n";
     return 0;
 }

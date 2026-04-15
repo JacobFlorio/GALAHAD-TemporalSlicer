@@ -18,7 +18,7 @@ int main() {
     auto tools = adapter.handleToolCall("list_tools", json::object());
     assert(tools["ok"] == true);
     assert(tools["result"].is_array());
-    assert(tools["result"].size() >= 15);  // core surface covered
+    assert(tools["result"].size() >= 17);  // now 19 tools incl why_not + explain_with
 
     // --- now: monotonic clock visible through the adapter ---
     auto now1 = adapter.handleToolCall("now", json::object());
@@ -169,6 +169,107 @@ int main() {
     auto missing = adapter.handleToolCall("explain", json::object());
     assert(missing["ok"] == false);
 
-    std::cout << "test_adapter: OK (LLM tool-call surface)\n";
+    // --- counterfactual queries via JSON tools ---
+    // Build a fresh scenario on a separate core/engine/adapter triple
+    // so it doesn't interact with the earlier test fixtures. Setup goes
+    // through add_event/add_projection/refute_branch tool calls only,
+    // matching the style of the rest of this file.
+    {
+        TemporalCore cf_core;
+        TemporalEngine cf_engine(cf_core);
+        LLMToolAdapter cf_adapter(cf_core, cf_engine);
+
+        auto cf_now = cf_adapter.handleToolCall("now", json::object());
+        const std::int64_t b = cf_now["result"]["ns"].get<std::int64_t>();
+
+        // Main timeline: perceive -> decide
+        cf_adapter.handleToolCall("add_event", json{
+            {"id", "p"},
+            {"valid_from", b},
+            {"valid_to",   b + 5'000'000},   // +5 ms
+            {"recorded_at", b},
+            {"type", "perception"},
+            {"causal_links", json::array()}
+        });
+        cf_adapter.handleToolCall("add_event", json{
+            {"id", "d"},
+            {"valid_from", b + 5'000'000},
+            {"valid_to",   b + 10'000'000},
+            {"recorded_at", b + 5'000'000},
+            {"type", "decision"},
+            {"causal_links", {"p"}}
+        });
+
+        // Refuted projection branch: fut_ignore depending on decide
+        cf_adapter.handleToolCall("add_projection", json{
+            {"id", "fut_ignore"},
+            {"valid_from", b + 10'000'000},
+            {"valid_to",   b + 15'000'000},
+            {"recorded_at", b + 5'000'000},
+            {"type", "projected_action"},
+            {"data", {{"do", "wait"}}},
+            {"causal_links", {"d"}},
+            {"branch_id", "ignore"},
+            {"confidence", 0.3}
+        });
+        cf_adapter.handleToolCall("refute_branch", json{{"branch", "ignore"}});
+
+        // why_not on the refuted-branch event returns the branch + chain
+        auto wn = cf_adapter.handleToolCall(
+            "why_not", json{{"id", "fut_ignore"}});
+        assert(wn["ok"] == true);
+        auto arr = wn["result"];
+        assert(arr.is_array());
+        assert(arr.size() == 1);
+        assert(arr[0]["branch"] == "ignore");
+        assert(arr[0]["hypothetical_event"]["id"] == "fut_ignore");
+        assert(arr[0]["hypothetical_event"]["data"]["do"] == "wait");
+        assert(arr[0]["hypothetical_event"]["confidence"] == 0.3);
+        assert(arr[0]["would_have_been_causes"].is_array());
+        assert(arr[0]["would_have_been_causes"].size() == 2);  // d, p
+
+        // why_not on a real event returns empty
+        auto wn_real = cf_adapter.handleToolCall(
+            "why_not", json{{"id", "d"}});
+        assert(wn_real["ok"] == true);
+        assert(wn_real["result"].empty());
+
+        // why_not on a nonexistent event returns empty
+        auto wn_none = cf_adapter.handleToolCall(
+            "why_not", json{{"id", "does_not_exist"}});
+        assert(wn_none["ok"] == true);
+        assert(wn_none["result"].empty());
+
+        // explain_with: add a hypothetical event citing `d`, ask explain
+        // on it, get the full chain back from the fork. The real core
+        // must NOT contain the hypothetical afterwards.
+        json mutation = {
+            {"id", "hyp"},
+            {"valid_from", b + 20'000'000},
+            {"valid_to",   b + 30'000'000},
+            {"recorded_at", b + 20'000'000},
+            {"type", "hypothetical_action"},
+            {"causal_links", {"d"}}
+        };
+        auto ew = cf_adapter.handleToolCall(
+            "explain_with",
+            json{
+                {"target_id", "hyp"},
+                {"mutation", mutation}
+            });
+        assert(ew["ok"] == true);
+        auto causes = ew["result"]["causes"];
+        assert(causes.size() == 2);  // d, p in temporal order
+        assert(causes[0]["id"] == "p");
+        assert(causes[1]["id"] == "d");
+
+        // Real core still does NOT contain the hypothetical event.
+        auto check = cf_adapter.handleToolCall(
+            "get_event", json{{"id", "hyp"}});
+        assert(check["ok"] == true);
+        assert(check["result"].is_null());
+    }
+
+    std::cout << "test_adapter: OK (LLM tool-call surface + counterfactuals)\n";
     return 0;
 }

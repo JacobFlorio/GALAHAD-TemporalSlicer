@@ -45,6 +45,17 @@ enum class AllenRelation {
     StartedBy, During, Finishes, OverlappedBy, MetBy, PrecededBy
 };
 
+// A counterfactual explanation returned by TemporalCore::whyNot(id).
+// One entry per refuted projection branch that contained a prediction
+// of the queried event. The would-have-been causes walk is performed
+// without refutation filtering so the caller sees the full hypothetical
+// causal chain, not just the subset that survived.
+struct CounterfactualExplanation {
+    std::string branch;                                   // refuted branch name
+    TemporalEvent hypothetical_event;                     // the predicted event
+    std::vector<TemporalEvent> would_have_been_causes;    // transitive ancestors
+};
+
 class TemporalCore {
 public:
     TemporalCore();
@@ -107,6 +118,22 @@ public:
 
     // Names of branches currently marked refuted.
     std::vector<std::string> getRefutedBranches() const;
+
+    // Deep copy of the current core — independent event store, indices,
+    // pools, refutation set, and clock. Intended for hypothetical
+    // reasoning: clone, mutate the copy, query, drop. All members are
+    // value types so the default member-wise copy is a true deep copy
+    // with no shared state.
+    TemporalCore clone() const;
+
+    // Counterfactual query: "why did this event NOT happen?"
+    // Returns one entry per refuted projection branch that contained a
+    // prediction of `id`, including the predicted event and its would-
+    // have-been causal chain (walked without refutation filtering so the
+    // caller sees the full hypothetical ancestry). Empty if the event
+    // actually happened on main, if no prediction of it was ever made,
+    // or if every predicting branch was promoted rather than refuted.
+    std::vector<CounterfactualExplanation> whyNot(const std::string& id) const;
 
 private:
     struct StoredEvent {

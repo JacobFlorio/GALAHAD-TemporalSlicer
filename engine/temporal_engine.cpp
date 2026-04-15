@@ -51,4 +51,19 @@ std::vector<TemporalEvent> TemporalEngine::whatHappenedDuring(
     return core_.queryRange(window, as_of, branch);
 }
 
+TemporalEngine::Explanation TemporalEngine::explainWith(
+    const std::string& target_id,
+    const TemporalEvent& mutation,
+    std::optional<TimePoint> as_of,
+    bool require_completed_before,
+    std::optional<BranchId> branch) const {
+    // Clone the core, apply the mutation, run explain on the fork. The
+    // fork is local to this call and goes out of scope when we return,
+    // so the original core is completely untouched.
+    TemporalCore fork = core_.clone();
+    fork.addEvent(mutation);
+    TemporalEngine fork_engine(fork);
+    return fork_engine.explain(target_id, as_of, require_completed_before, branch);
+}
+
 } // namespace galahad

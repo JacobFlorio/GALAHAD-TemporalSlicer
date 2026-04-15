@@ -751,6 +751,68 @@ std::vector<std::string> TemporalCore::getRefutedBranches() const {
     return out;
 }
 
+TemporalCore TemporalCore::clone() const {
+    // Every member is a value type (deques, maps, sets, pools, flags,
+    // vectors of pairs). The implicit copy constructor does a true
+    // member-wise deep copy with no shared state. Returning *this lets
+    // the compiler apply NRVO where possible.
+    return *this;
+}
+
+std::vector<CounterfactualExplanation> TemporalCore::whyNot(
+    const std::string& id) const {
+    std::vector<CounterfactualExplanation> out;
+    const auto id_h = lookupEventId(id);
+    if (!id_h) return out;
+
+    ensureCausalFresh();
+
+    // Walk ALL ancestors of the hypothetical event without any refutation
+    // filter. This is a local BFS over causalGraph that ignores branch
+    // membership entirely, because the would-have-been chain by definition
+    // crosses branches — a refuted projection typically cites main-timeline
+    // events as its parents.
+    auto walkAllAncestors = [&](InternalEventId start)
+        -> std::vector<TemporalEvent> {
+        std::vector<TemporalEvent> ancestors;
+        std::unordered_set<InternalEventId> seen;
+        std::queue<InternalEventId> frontier;
+        frontier.push(start);
+        seen.insert(start);
+        while (!frontier.empty()) {
+            auto cur = frontier.front();
+            frontier.pop();
+            auto it = causalGraph.find(cur);
+            if (it == causalGraph.end()) continue;
+            for (auto parent : it->second) {
+                if (seen.count(parent)) continue;
+                seen.insert(parent);
+                // Prefer the latest recorded version of the parent across
+                // any branch. idIndex is sorted by recorded_at DESC, so
+                // the first entry is the most recent.
+                auto vit = idIndex.find(parent);
+                if (vit == idIndex.end() || vit->second.empty()) continue;
+                ancestors.push_back(materialize(events[vit->second.front()]));
+                frontier.push(parent);
+            }
+        }
+        return ancestors;
+    };
+
+    // One entry per distinct refuted-branch-hosted version of the event.
+    for (const auto& e : events) {
+        if (e.id != *id_h) continue;
+        if (refutedBranches.find(e.branch_id) == refutedBranches.end()) continue;
+
+        CounterfactualExplanation cf;
+        cf.branch = resolveBranchId(e.branch_id);
+        cf.hypothetical_event = materialize(e);
+        cf.would_have_been_causes = walkAllAncestors(e.id);
+        out.push_back(std::move(cf));
+    }
+    return out;
+}
+
 void TemporalCore::pruneBranch(const std::string& branch) {
     if (branch == "main") return;
     auto h = lookupBranchId(branch);

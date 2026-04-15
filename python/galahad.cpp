@@ -267,6 +267,20 @@ PYBIND11_MODULE(galahad, m) {
         .def_readonly("completed_before_target",
                       &TemporalEngine::Explanation::completed_before_target);
 
+    // ---- CounterfactualExplanation ----
+    py::class_<CounterfactualExplanation>(m, "CounterfactualExplanation")
+        .def_readonly("branch",
+                      &CounterfactualExplanation::branch)
+        .def_readonly("hypothetical_event",
+                      &CounterfactualExplanation::hypothetical_event)
+        .def_readonly("would_have_been_causes",
+                      &CounterfactualExplanation::would_have_been_causes)
+        .def("__repr__", [](const CounterfactualExplanation& cf) {
+            return "<CounterfactualExplanation branch='" + cf.branch +
+                   "' event='" + cf.hypothetical_event.id +
+                   "' causes=" + std::to_string(cf.would_have_been_causes.size()) + ">";
+        });
+
     // ---- TemporalCore ----
     py::class_<TemporalCore>(m, "TemporalCore")
         .def(py::init<>())
@@ -314,7 +328,16 @@ PYBIND11_MODULE(galahad, m) {
         .def("is_refuted",       &TemporalCore::isRefuted,     py::arg("branch"))
         .def("now",              &TemporalCore::now)
         .def("get_all_events",   &TemporalCore::getAllEvents)
-        .def("get_refuted_branches", &TemporalCore::getRefutedBranches);
+        .def("get_refuted_branches", &TemporalCore::getRefutedBranches)
+        .def("clone",            &TemporalCore::clone,
+             "Deep-copy the core into an independent TemporalCore. Use "
+             "for hypothetical reasoning: clone, mutate the copy, query, "
+             "drop.")
+        .def("why_not",          &TemporalCore::whyNot,
+             py::arg("id"),
+             "Counterfactual: return one CounterfactualExplanation per "
+             "refuted projection branch that contained a prediction of "
+             "`id`. Empty if the event actually happened on main.");
 
     // ---- TemporalEngine ----
     py::class_<TemporalEngine>(m, "TemporalEngine")
@@ -329,7 +352,16 @@ PYBIND11_MODULE(galahad, m) {
         .def("what_happened_during", &TemporalEngine::whatHappenedDuring,
              py::arg("window"),
              py::arg("as_of")  = py::none(),
-             py::arg("branch") = py::none());
+             py::arg("branch") = py::none())
+        .def("explain_with", &TemporalEngine::explainWith,
+             py::arg("target_id"),
+             py::arg("mutation"),
+             py::arg("as_of")  = py::none(),
+             py::arg("require_completed_before") = true,
+             py::arg("branch") = py::none(),
+             "Hypothetical explain: clone the core, apply the mutation, "
+             "and run explain() on the target in the fork. Original core "
+             "is untouched.");
 
     // ---- LLMToolAdapter ----
     py::class_<LLMToolAdapter>(m, "LLMToolAdapter")
@@ -353,5 +385,5 @@ PYBIND11_MODULE(galahad, m) {
         .def_readonly_static("format_version",
                              &TemporalPersistence::kFormatVersion);
 
-    m.attr("__version__") = "0.1.3";
+    m.attr("__version__") = "0.2.0";
 }

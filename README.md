@@ -97,6 +97,45 @@ zero custom glue.
   system's past belief state.
 - **`whatHappenedDuring(window)`** — events overlapping a time window, branch-filtered,
   returned as full `TemporalEvent` objects.
+- **`explainWith(target, mutation)`** — hypothetical explain: clones the core,
+  applies a mutation, then runs `explain` on the fork without touching the
+  original. Ask "if this event had happened, what would its causal
+  explanation look like?" (see Counterfactual queries below).
+
+### Counterfactual queries (new in 0.2.0)
+
+GALAHAD is the only OSS temporal engine with first-class counterfactual
+primitives because it already has what they require: an event-level
+refutation set and bitemporal semantics. Two new operations expose this:
+
+- **`TemporalCore::whyNot(id)`** — "why did this event NOT happen?"
+  Returns one entry per refuted projection branch that contained a
+  prediction of the given event id. Each entry includes the refuted
+  branch name, the predicted event (with its metadata and confidence),
+  and the would-have-been causal ancestry walked across all branches so
+  you see the full hypothetical chain — not just the subset that
+  survived refutation. Empty if the event actually happened on main,
+  if no prediction of it was ever made, or if every predicting branch
+  was promoted rather than refuted.
+
+- **`TemporalEngine::explainWith(target, mutation)`** — hypothetical
+  explain. Clone the core, apply the mutation as a fresh `addEvent`,
+  run `explain(target)` on the fork. Original core untouched. Use this
+  to probe causal hypotheses without committing them — "if I had added
+  this event, what would its ancestry have been?"
+
+- **`TemporalCore::clone()`** — the enabling primitive. Deep copies the
+  full core state (events, indices, pools, refutation set, clock)
+  into an independent `TemporalCore`. All members are value types, so
+  the implicit copy constructor does a true deep copy with zero shared
+  state. `explainWith` is a thin wrapper on top of this.
+
+The LLM adapter exposes two new JSON tools for counterfactuals:
+**`why_not`** and **`explain_with`**, bringing the adapter's vendor-
+neutral tool count to 19. An agent can now ask "what refuted branches
+predicted this event?" and "what would the causal chain look like if
+this mutation had happened?" with one tool call each, in addition to
+all the existing forward queries.
 
 ### What's in the adapter
 
@@ -430,6 +469,26 @@ Explanation explain(const std::string& id,
 std::vector<TemporalEvent> whatHappenedDuring(TimeWindow window,
                                               std::optional<TimePoint> as_of = {},
                                               std::optional<std::string> branch = {}) const;
+
+Explanation explainWith(const std::string& target_id,
+                        const TemporalEvent& mutation,
+                        std::optional<TimePoint> as_of = {},
+                        bool require_completed_before = true,
+                        std::optional<std::string> branch = {}) const;
+```
+
+### Counterfactuals
+
+```cpp
+struct CounterfactualExplanation {
+    std::string branch;
+    TemporalEvent hypothetical_event;
+    std::vector<TemporalEvent> would_have_been_causes;
+};
+
+TemporalCore TemporalCore::clone() const;
+std::vector<CounterfactualExplanation>
+    TemporalCore::whyNot(const std::string& id) const;
 ```
 
 ## Current status

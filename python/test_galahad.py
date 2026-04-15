@@ -264,7 +264,88 @@ def main():
 
     print("  timezone round-trip OK")
 
-    print("\ntest_galahad: OK (core + engine + adapter + persistence + timezone)")
+    # ------------------------------------------------------------------
+    # Counterfactual queries (new in 0.2.0): whyNot, explainWith, clone.
+    # ------------------------------------------------------------------
+    print()
+    print("Counterfactuals (new in 0.2.0):")
+
+    cf_core = galahad.TemporalCore()
+    cf_engine = galahad.TemporalEngine(cf_core)
+    cf_adapter = galahad.LLMToolAdapter(cf_core, cf_engine)
+    cft = datetime.now(timezone.utc)
+
+    cf_core.add_event(mk("cf_p",      cft,         cft + ms(5),  cft,
+                         "perception", {"obs": "door_open"}))
+    cf_core.add_event(mk("cf_d",      cft + ms(5), cft + ms(10), cft + ms(5),
+                         "decision",  {"choose": "close"},
+                         ["cf_p"]))
+
+    cf_core.add_projection(mk("cf_fut_ignore",
+                              cft + ms(10), cft + ms(15), cft + ms(5),
+                              "projected_action", {"do": "wait"},
+                              ["cf_d"], branch="ignore"))
+    cf_core.refute_branch("ignore")
+
+    # why_not via the C++ binding (returns CounterfactualExplanation)
+    cfs = cf_core.why_not("cf_fut_ignore")
+    assert len(cfs) == 1
+    assert cfs[0].branch == "ignore"
+    assert cfs[0].hypothetical_event.id == "cf_fut_ignore"
+    assert cfs[0].hypothetical_event.data["do"] == "wait"
+    # Would-have-been chain: cf_d and cf_p
+    causes_ids = [e.id for e in cfs[0].would_have_been_causes]
+    assert "cf_d" in causes_ids and "cf_p" in causes_ids
+    print(f"  binding why_not('cf_fut_ignore') -> "
+          f"branch={cfs[0].branch}, "
+          f"causes={sorted(causes_ids)} OK")
+
+    # why_not on a real event
+    assert cf_core.why_not("cf_d") == []
+    assert cf_core.why_not("nonexistent") == []
+
+    # Adapter why_not via JSON round-trip
+    wn = cf_adapter.handle_tool_call("why_not", {"id": "cf_fut_ignore"})
+    assert wn["ok"] is True
+    assert len(wn["result"]) == 1
+    assert wn["result"][0]["branch"] == "ignore"
+    assert wn["result"][0]["hypothetical_event"]["data"]["do"] == "wait"
+    print(f"  adapter why_not JSON round-trip OK "
+          f"({len(wn['result'][0]['would_have_been_causes'])} would-have-been causes)")
+
+    # explain_with via the engine
+    hyp = galahad.TemporalEvent()
+    hyp.id = "cf_hyp"
+    hyp.valid_from = cft + ms(20)
+    hyp.valid_to = cft + ms(30)
+    hyp.recorded_at = cft + ms(20)
+    hyp.type = "hypothetical"
+    hyp.causal_links = ["cf_d"]
+    hyp_exp = cf_engine.explain_with("cf_hyp", hyp)
+    assert len(hyp_exp.causes) == 2
+    assert [c.id for c in hyp_exp.causes] == ["cf_p", "cf_d"]
+
+    # Real core unaffected by the hypothetical explain_with call.
+    assert cf_core.get("cf_hyp") is None
+    print("  engine.explain_with(hyp) OK (core unmutated)")
+
+    # clone: deep copy, independent mutations
+    forked = cf_core.clone()
+    extra = galahad.TemporalEvent()
+    extra.id = "only_in_fork"
+    extra.valid_from = cft + ms(50)
+    extra.valid_to = cft + ms(55)
+    extra.recorded_at = cft + ms(50)
+    extra.type = "test"
+    forked.add_event(extra)
+    assert forked.get("only_in_fork") is not None
+    assert cf_core.get("only_in_fork") is None
+    print("  core.clone() -> independent fork OK")
+
+    print("  counterfactual queries OK")
+
+    print("\ntest_galahad: OK (core + engine + adapter + persistence + "
+          "timezone + counterfactuals)")
 
 
 if __name__ == "__main__":

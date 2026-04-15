@@ -384,6 +384,42 @@ json LLMToolAdapter::getToolSchemas() const {
         {"branch"}));
 
     tools.push_back(tool(
+        "why_not",
+        "Counterfactual query: 'why did this event NOT happen?' Returns "
+        "one entry per refuted projection branch that contained a "
+        "prediction of the given event id. Each entry has the refuted "
+        "branch name, the predicted event (with data/confidence/links), "
+        "and the would-have-been causal chain walked across all branches "
+        "(not just refuted ones) so you see the full hypothetical "
+        "ancestry. Empty if the event actually happened on main, if no "
+        "prediction of it was ever made, or if every predicting branch "
+        "was promoted rather than refuted. Use this to answer 'what "
+        "almost happened?' without losing the bitemporal distinction.",
+        json{{"id", strProp("Event id that did not happen")}},
+        {"id"}));
+
+    tools.push_back(tool(
+        "explain_with",
+        "Hypothetical explain: ask 'if this event had happened, what "
+        "would its causal explanation look like?' Clones the current "
+        "core, applies the supplied mutation event via add_event on the "
+        "fork, then runs explain() against the fork. The original core "
+        "is untouched — callers can test causal hypotheses without "
+        "committing them. The `mutation` argument takes the same shape "
+        "as add_event (id, valid_from, valid_to required; type, data, "
+        "causal_links, branch_id, confidence, recorded_at optional).",
+        json{
+            {"target_id", strProp("Event id to explain in the fork")},
+            {"mutation",  json{{"type", "object"},
+                               {"description", "Event to add to the fork"}}},
+            {"as_of", tsProp("Transaction-time ceiling for the explain")},
+            {"require_completed_before", boolProp(
+                "Only include ancestors completed before target start", true)},
+            {"branch", strProp("Branch filter for the explain")}
+        },
+        {"target_id", "mutation"}));
+
+    tools.push_back(tool(
         "list_tools",
         "Return the full list of available tools with their input schemas.",
         json::object(), {}));
@@ -480,6 +516,32 @@ json LLMToolAdapter::handleToolCall(
         }
         if (tool_name == "is_refuted") {
             return ok(core_.isRefuted(args.at("branch").get<std::string>()));
+        }
+        if (tool_name == "why_not") {
+            auto cfs = core_.whyNot(args.at("id").get<std::string>());
+            json arr = json::array();
+            for (const auto& cf : cfs) {
+                json item;
+                item["branch"] = cf.branch;
+                item["hypothetical_event"] = eventToJson(cf.hypothetical_event);
+                item["would_have_been_causes"] =
+                    eventsToJson(cf.would_have_been_causes);
+                arr.push_back(std::move(item));
+            }
+            return ok(arr);
+        }
+        if (tool_name == "explain_with") {
+            auto mutation = eventFromJson(args.at("mutation"));
+            auto exp = engine_.explainWith(
+                args.at("target_id").get<std::string>(),
+                mutation,
+                optTp(args, "as_of"),
+                args.value("require_completed_before", true),
+                optStr(args, "branch"));
+            return ok(json{
+                {"causes", eventsToJson(exp.causes)},
+                {"completed_before_target", exp.completed_before_target}
+            });
         }
         return err("unknown tool: " + tool_name);
     } catch (const std::exception& e) {
