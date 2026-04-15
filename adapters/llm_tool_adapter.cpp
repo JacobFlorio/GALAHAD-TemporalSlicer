@@ -384,6 +384,44 @@ json LLMToolAdapter::getToolSchemas() const {
         {"branch"}));
 
     tools.push_back(tool(
+        "get_projections",
+        "List every projection event (i.e. every non-main-branch event). "
+        "Without a branch filter, skips refuted branches so you see only "
+        "the open projections. Pass an explicit branch name to retrieve "
+        "events on a specific projection branch even if it is refuted. "
+        "Use this to enumerate the open forward-looking predictions the "
+        "agent is currently entertaining, or to fetch the events on a "
+        "named branch for audit purposes.",
+        json{
+            {"branch", strProp(
+                "Optional branch filter. Omit to list all non-refuted "
+                "projection branches; name a specific branch to include "
+                "it even if refuted.")}
+        },
+        {}));
+
+    tools.push_back(tool(
+        "get_refuted_branches",
+        "List the names of every projection branch currently marked as "
+        "refuted. Refuted branches are preserved (their events are still "
+        "queryable by explicit branch name and via why_not) but default "
+        "queries skip them. Use this as the starting point for a "
+        "counterfactual sweep — pair it with why_not to enumerate every "
+        "refuted prediction and its would-have-been causal chain.",
+        json::object(), {}));
+
+    tools.push_back(tool(
+        "get_all_events",
+        "Return every event currently in the store, across all branches "
+        "(including refuted) and all versions, in insertion order. "
+        "Useful for introspection when you need the full shape of the "
+        "memory and the targeted query tools (explain, query_range, "
+        "get_event) are too narrow. Returns events as full records with "
+        "id, valid_from, valid_to, recorded_at, type, data, causal_links, "
+        "branch_id, and confidence.",
+        json::object(), {}));
+
+    tools.push_back(tool(
         "why_not",
         "Counterfactual query: 'why did this event NOT happen?' Returns "
         "one entry per refuted projection branch that contained a "
@@ -516,6 +554,16 @@ json LLMToolAdapter::handleToolCall(
         }
         if (tool_name == "is_refuted") {
             return ok(core_.isRefuted(args.at("branch").get<std::string>()));
+        }
+        if (tool_name == "get_projections") {
+            auto events = core_.getProjections(optStr(args, "branch"));
+            return ok(eventsToJson(events));
+        }
+        if (tool_name == "get_refuted_branches") {
+            return ok(core_.getRefutedBranches());
+        }
+        if (tool_name == "get_all_events") {
+            return ok(eventsToJson(core_.getAllEvents()));
         }
         if (tool_name == "why_not") {
             auto cfs = core_.whyNot(args.at("id").get<std::string>());
