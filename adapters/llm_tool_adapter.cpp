@@ -39,7 +39,12 @@ std::int64_t tpToNanos(TimePoint tp) {
 }
 
 TimePoint tpFromNanos(std::int64_t ns) {
-    return TimePoint(std::chrono::nanoseconds(ns));
+    // Match TimePoint's native resolution via duration_cast so the code
+    // compiles on both libstdc++ (clock = nanoseconds) and libc++ (clock
+    // = microseconds). See persistence.cpp for the precision note.
+    return TimePoint(
+        std::chrono::duration_cast<TimePoint::duration>(
+            std::chrono::nanoseconds(ns)));
 }
 
 TimePoint tpFromIso(const std::string& s) {

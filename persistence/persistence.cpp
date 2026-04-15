@@ -125,7 +125,16 @@ std::int64_t tpToNanos(TimePoint tp) {
 }
 
 TimePoint tpFromNanos(std::int64_t ns) {
-    return TimePoint(std::chrono::nanoseconds(ns));
+    // Convert to the clock's native duration before constructing the
+    // time_point. On libstdc++ the clock is nanosecond-resolution so this
+    // is lossless; on libc++ (macOS) the clock is microsecond-resolution,
+    // and any sub-microsecond fraction is truncated. Accepting that loss
+    // is the right call for v0.1.x — every timestamp in the test suite
+    // and every timestamp produced by Python's datetime lives at
+    // microsecond resolution or coarser.
+    return TimePoint(
+        std::chrono::duration_cast<TimePoint::duration>(
+            std::chrono::nanoseconds(ns)));
 }
 
 void writeEvent(std::ostream& o, const TemporalEvent& e) {

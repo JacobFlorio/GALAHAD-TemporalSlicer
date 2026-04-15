@@ -139,7 +139,12 @@ TemporalEvent TemporalCore::materialize(const StoredEvent& s) const {
 
 TimePoint TemporalCore::now() const {
     auto wall = Clock::now();
-    if (wall <= lastNow) wall = lastNow + std::chrono::nanoseconds(1);
+    // `Clock::duration(1)` is one tick of the clock's native resolution —
+    // nanoseconds on libstdc++, microseconds on libc++. Using a literal
+    // std::chrono::nanoseconds(1) produces a time_point in nanosecond
+    // resolution that libc++ refuses to assign back into a microsecond-
+    // resolution time_point, breaking the macOS build.
+    if (wall <= lastNow) wall = lastNow + Clock::duration(1);
     lastNow = wall;
     return wall;
 }
@@ -152,7 +157,8 @@ TimePoint TemporalCore::computePromoteTime() const {
     auto t = now();
     for (const auto& e : events) {
         if (e.recorded_at >= t) {
-            t = e.recorded_at + std::chrono::nanoseconds(1);
+            // See comment in now(): Clock::duration(1) for portability.
+            t = e.recorded_at + Clock::duration(1);
         }
     }
     lastNow = t;
