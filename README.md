@@ -419,7 +419,10 @@ expressible in any single library in the categories above.
 
 ## License
 
-TBD — this is a research project in active development.
+MIT. See [LICENSE](LICENSE). Copyright (c) 2026 Jacob T. Florio.
+
+Third-party dependency: [nlohmann/json](https://github.com/nlohmann/json) v3.11.3,
+pulled via CMake `FetchContent`, also MIT-licensed.
 
 ## Project scope
 
