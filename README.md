@@ -1,5 +1,9 @@
 # GALAHAD-TemporalSlicer
 
+[![CI](https://github.com/JacobFlorio/GALAHAD-TemporalSlicer/actions/workflows/ci.yml/badge.svg)](https://github.com/JacobFlorio/GALAHAD-TemporalSlicer/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/galahad-temporal.svg)](https://pypi.org/project/galahad-temporal/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A unified temporal reasoning core for AI systems: bitemporal storage, causal DAG,
 Allen interval algebra, branching projections, lifecycle, a first-class LLM
 tool-call adapter, binary persistence, **and Python bindings**. C++20 core,
@@ -601,10 +605,11 @@ expressible in any single library in the categories above.
 ## Roadmap
 
 **Near term**
+- Windows support: port the adapter's POSIX time APIs (`strptime`,
+  `gmtime_r`, `timegm`) to MSVC equivalents so `cibuildwheel` can
+  add Windows wheels to the release matrix
 - Incremental persistence: append-only log alongside the snapshot format, so
   long-lived agents don't have to rewrite the full state on every checkpoint
-- Real benchmark harness with workloads: 1M-event insert/query, `explain` at depth 1000,
-  mixed Allen+causal queries at 100k events, 100-branch projection scaling
 - Topological sort in `explain` for general DAGs
 
 **Medium term**
@@ -621,6 +626,77 @@ expressible in any single library in the categories above.
 - Hierarchical branches ("close_door.option_A" nested under "close_door")
 - First robotics integration — plug into an active agent loop as the belief-and-plan
   substrate
+
+## Release process
+
+CI and wheel publishing are driven by two GitHub Actions workflows in
+`.github/workflows/`.
+
+### Continuous integration
+
+`ci.yml` runs on every push to `main` and every pull request. It builds
+the full C++ tree (core, engine, adapter, persistence, bench, all four
+test binaries), runs the four C++ test binaries end-to-end, runs the
+bench as a smoke check, installs the package with `pip install .`, and
+runs the Python test suite against the *installed* module from a neutral
+working directory so `import galahad` hits site-packages and not the
+build tree. Matrix covers Python 3.10 / 3.11 / 3.12 on Ubuntu plus one
+run on macOS. Windows is intentionally skipped until the adapter's
+POSIX time APIs (`strptime`, `gmtime_r`, `timegm`) are ported to the
+MSVC CRT equivalents.
+
+### Cutting a release
+
+1. Bump the version in both `pyproject.toml` and
+   `python/galahad.cpp` (the `m.attr("__version__")` line).
+2. Commit with a descriptive message (don't skip the `Co-Authored-By`
+   trailer — it matches the rest of the project's history).
+3. Tag and push:
+   ```bash
+   git tag -a v0.1.2 -m "release v0.1.2"
+   git push origin v0.1.2
+   ```
+
+### Automated wheel building
+
+The `v*` tag triggers `wheels.yml`, which:
+
+- Uses [cibuildwheel](https://cibuildwheel.readthedocs.io/) to build
+  CPython 3.8–3.12 wheels on three native runners:
+  Linux `manylinux_2_28` x86_64 (via `gcc-toolset-14`, new enough for
+  C++20), macOS x86_64 (`macos-13`, Intel), and macOS arm64 (`macos-14`,
+  Apple Silicon).
+- Runs `python/test_galahad.py` against every built wheel via
+  `CIBW_TEST_COMMAND` before the wheel leaves the runner. The timezone
+  regression that cost us 0.1.1 would have been caught here.
+- Builds the sdist via `python -m build --sdist` on a fourth runner so
+  `pip install galahad-temporal` from source still works on any
+  platform including Windows (via user-side compilation).
+- Publishes every wheel plus the sdist to PyPI via
+  [trusted publishing](https://docs.pypi.org/trusted-publishers/) —
+  no API token stored in GitHub secrets.
+
+### One-time PyPI trusted-publishing setup
+
+Before the first automated release, you need to tell PyPI to trust this
+workflow. This is a one-time click-through:
+
+1. Go to https://pypi.org/manage/project/galahad-temporal/settings/publishing/
+2. Add a new "Trusted publisher" with:
+   - **Owner:** `JacobFlorio`
+   - **Repository name:** `GALAHAD-TemporalSlicer`
+   - **Workflow name:** `wheels.yml`
+   - **Environment name:** `pypi`
+3. Save.
+
+After that, every `git push origin v*` tag triggers a full wheel build
+and publish without any manual intervention. Future releases become
+`git tag -a v0.1.2 -m … && git push --tags`.
+
+Until the trusted-publisher is configured, the `publish_to_pypi` job
+will fail, but the `build_wheels` and `build_sdist` jobs still run and
+upload their artifacts to the GitHub Actions run page. You can download
+those manually and `twine upload` them if needed.
 
 ## License
 

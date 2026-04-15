@@ -1,0 +1,133 @@
+name: Build wheels
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_wheels:
+    name: Wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-latest  -> Linux manylinux_2_28 x86_64 (gcc-toolset-14)
+        # macos-13       -> macOS x86_64 (Intel)
+        # macos-14       -> macOS arm64 (Apple Silicon)
+        # Windows is intentionally skipped — the adapter uses POSIX time
+        # APIs (strptime / gmtime_r / timegm) that are not in the MSVC
+        # CRT. Windows wheels will land when the adapter is portable.
+        os: [ubuntu-latest, macos-13, macos-14]
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Build wheels
+      uses: pypa/cibuildwheel@v2.21.3
+      env:
+        # Only build CPython 3.8-3.12. PyPy is skipped (our C++ extension
+        # targets CPython ABI). musllinux is skipped because the Alpine
+        # base lacks a modern C++20 toolchain in the default cibuildwheel
+        # setup — a later PR can add it.
+        CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+        CIBW_SKIP:  "*-musllinux_* pp*"
+
+        # Architectures per platform. Linux ships x86_64 only for now
+        # (aarch64 needs a native ARM runner or qemu emulation — later).
+        # macOS ships both x86_64 (on macos-13) and arm64 (on macos-14)
+        # as native builds, no cross-compile.
+        CIBW_ARCHS_LINUX:  "x86_64"
+        CIBW_ARCHS_MACOS:  "auto"
+
+        # Use manylinux_2_28 which ships gcc-toolset-14 — new enough
+        # for C++20. The default manylinux2014 image has a too-old gcc
+        # for our source. glibc 2.28+ means Ubuntu 18.04+, CentOS 8+,
+        # Debian 10+, RHEL 8+ — all modern enough for a 2026 release.
+        CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
+
+        # Smoke-test every built wheel before it leaves the runner.
+        # If the timezone regression ever comes back, or if any other
+        # binding breakage slips through, this test command catches it
+        # per-wheel before publish.
+        CIBW_TEST_COMMAND: 'python {project}/python/test_galahad.py'
+
+        CIBW_BUILD_VERBOSITY: "1"
+
+    - name: Upload wheels artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ matrix.os }}
+        path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install build tooling
+      run: python -m pip install --upgrade pip build
+
+    - name: Build sdist
+      run: python -m build --sdist
+
+    - name: Upload sdist artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sdist
+        path: dist/*.tar.gz
+
+  publish_to_pypi:
+    name: Publish to PyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    # Only publish on actual tag pushes, not workflow_dispatch runs.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+
+    # Trusted publishing: no API token in GitHub secrets. One-time setup
+    # is required on PyPI — see README "Release process" section for the
+    # step-by-step. Until that setup is done the first time, this job
+    # will fail; the wheels and sdist are still available as artifacts
+    # and can be uploaded manually via `twine upload`.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/galahad-temporal/
+    permissions:
+      id-token: write  # required for trusted publishing via OIDC
+
+    steps:
+    - name: Download all artifacts into dist/
+      uses: actions/download-artifact@v4
+      with:
+        path: dist
+        pattern: "wheels-*"
+        merge-multiple: true
+
+    - name: Download sdist into dist/
+      uses: actions/download-artifact@v4
+      with:
+        name: sdist
+        path: dist
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        packages-dir: dist
+        skip-existing: true
