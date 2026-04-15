@@ -1,0 +1,90 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.10",
+    "pybind11>=2.13",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "galahad-temporal"
+version = "0.1.0"
+description = "Unified temporal reasoning core for AI: bitemporal storage, causal DAG, Allen interval algebra, branching projections, lifecycle, LLM tool-call adapter, binary persistence, and Python bindings."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Jacob T. Florio" },
+]
+requires-python = ">=3.8"
+keywords = [
+    "temporal reasoning",
+    "bitemporal",
+    "causal graph",
+    "allen interval algebra",
+    "branching projections",
+    "llm agents",
+    "ai memory",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://github.com/JacobFlorio/GALAHAD-TemporalSlicer"
+Repository = "https://github.com/JacobFlorio/GALAHAD-TemporalSlicer"
+Issues = "https://github.com/JacobFlorio/GALAHAD-TemporalSlicer/issues"
+
+[project.optional-dependencies]
+# Installs the Anthropic SDK so examples/anthropic_demo.py can run end-to-end.
+anthropic = ["anthropic>=0.40.0"]
+
+[tool.scikit-build]
+# Only the Python extension and its dependencies need to build for the
+# wheel. Skip the C++ test binaries and bench harness so `pip install`
+# is not stuck compiling things the wheel never ships.
+cmake.build-type = "Release"
+cmake.args = [
+    "-DGALAHAD_BUILD_TESTS=OFF",
+    "-DGALAHAD_BUILD_BENCH=OFF",
+    "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+]
+
+# Minimum CMake version that scikit-build-core will provision if the
+# system cmake is too old. Our CMakeLists requires 3.20.
+cmake.version = ">=3.20"
+
+# The extension module is a single top-level `galahad` — no pure-Python
+# package directory. The install(TARGETS galahad_py DESTINATION .) rule
+# in CMakeLists puts it at the wheel root.
+wheel.packages = []
+
+# Build the source distribution from a clean tree.
+sdist.include = [
+    "core/**",
+    "engine/**",
+    "adapters/**",
+    "persistence/**",
+    "python/**",
+    "tests/**",
+    "bench/**",
+    "examples/**",
+    "CMakeLists.txt",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]

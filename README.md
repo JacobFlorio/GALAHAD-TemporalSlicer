@@ -238,11 +238,32 @@ idiomatic Python ergonomics (snake_case methods, Python `datetime` for time
 points, `dict` for event data, `None` for optional arguments, `list[dict]`
 returned from the adapter).
 
-Build and import from source (no `pip` package yet):
+**Install from source with pip** (works today; a PyPI release is on the
+near-term roadmap):
+
+```bash
+git clone https://github.com/JacobFlorio/GALAHAD-TemporalSlicer
+cd GALAHAD-TemporalSlicer
+pip install .                     # or: pip install .[anthropic]
+python -c "import galahad; print(galahad.__version__)"
+```
+
+`pip install .` uses [`scikit-build-core`](https://scikit-build-core.readthedocs.io/)
+with `pybind11` as a build-system dependency. It compiles a single extension
+module (`galahad.*.so`) and installs it directly — no `PYTHONPATH` dance, no
+test binaries pulled into the wheel, no bench harness compiled. The install
+step takes roughly a minute on a commodity machine (FetchContent pulls
+`nlohmann/json` once; `pybind11` comes from the build env).
+
+The optional `[anthropic]` extra installs the Anthropic SDK so
+`examples/anthropic_demo.py` runs end-to-end.
+
+You can still build everything (C++ tests, bench, the Python module,
+adapter/persistence) from the repo without pip:
 
 ```bash
 cmake -B build && cmake --build build -j
-PYTHONPATH=build python3 -c "import galahad; print(galahad.__version__)"
+PYTHONPATH=build python3 python/test_galahad.py
 ```
 
 Quick-start mirror of the C++ example above:
@@ -580,8 +601,8 @@ expressible in any single library in the categories above.
 **Medium term**
 - Counterfactual queries (`whyNot`, hypothetical mutation)
 - Confidence propagation through causal chains
-- `pip`-installable Python package with wheels (the bindings exist; we just
-  need a `pyproject.toml` + CI wheels)
+- PyPI release (source install works via `pip install .` today; prebuilt
+  wheels for Linux/macOS/Windows via cibuildwheel next)
 - More framework-specific examples alongside `examples/anthropic_demo.py`
   (LangChain, OpenAI function-calling, tool-use harness for local models)
 

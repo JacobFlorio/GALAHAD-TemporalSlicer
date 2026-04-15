@@ -16,6 +16,8 @@ endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(GALAHAD_BUILD_PYTHON "Build the Python bindings" ON)
+option(GALAHAD_BUILD_TESTS  "Build the C++ test binaries"  ON)
+option(GALAHAD_BUILD_BENCH  "Build the benchmark harness"  ON)
 
 # ---- third-party: nlohmann_json (fetched) ----
 include(FetchContent)
@@ -56,23 +58,27 @@ target_include_directories(temporal_persistence PUBLIC persistence)
 target_link_libraries(temporal_persistence PUBLIC temporal_core)
 
 # ---- tests ----
-add_executable(test_temporal tests/test_temporal.cpp)
-target_link_libraries(test_temporal PRIVATE temporal_core)
+if(GALAHAD_BUILD_TESTS)
+    add_executable(test_temporal tests/test_temporal.cpp)
+    target_link_libraries(test_temporal PRIVATE temporal_core)
 
-add_executable(test_engine tests/test_engine.cpp)
-target_link_libraries(test_engine PRIVATE temporal_engine)
+    add_executable(test_engine tests/test_engine.cpp)
+    target_link_libraries(test_engine PRIVATE temporal_engine)
 
-add_executable(test_adapter tests/test_adapter.cpp)
-target_link_libraries(test_adapter PRIVATE temporal_adapter)
+    add_executable(test_adapter tests/test_adapter.cpp)
+    target_link_libraries(test_adapter PRIVATE temporal_adapter)
 
-add_executable(test_persistence tests/test_persistence.cpp)
-target_link_libraries(test_persistence PRIVATE temporal_persistence temporal_engine)
+    add_executable(test_persistence tests/test_persistence.cpp)
+    target_link_libraries(test_persistence PRIVATE temporal_persistence temporal_engine)
+endif()
 
 # ---- bench ----
-add_executable(bench_temporal bench/main.cpp)
-target_link_libraries(bench_temporal
-    PRIVATE temporal_core temporal_engine temporal_persistence
-)
+if(GALAHAD_BUILD_BENCH)
+    add_executable(bench_temporal bench/main.cpp)
+    target_link_libraries(bench_temporal
+        PRIVATE temporal_core temporal_engine temporal_persistence
+    )
+endif()
 
 # ---- Python bindings ----
 if(GALAHAD_BUILD_PYTHON)
@@ -108,5 +114,13 @@ if(GALAHAD_BUILD_PYTHON)
         temporal_adapter
         temporal_persistence
         nlohmann_json::nlohmann_json
+    )
+
+    # Install the extension module into the wheel root so `import galahad`
+    # resolves directly. scikit-build-core uses this install rule to
+    # populate the wheel layout.
+    install(TARGETS galahad_py
+        LIBRARY DESTINATION .
+        RUNTIME DESTINATION .
     )
 endif()
