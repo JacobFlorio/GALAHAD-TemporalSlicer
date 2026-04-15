@@ -1,8 +1,9 @@
 # GALAHAD-TemporalSlicer
 
 A unified temporal reasoning core for AI systems: bitemporal storage, causal DAG,
-Allen interval algebra, branching projections, lifecycle, **and a first-class LLM
-tool-call adapter**. C++20. In-memory. Research-grade.
+Allen interval algebra, branching projections, lifecycle, a first-class LLM
+tool-call adapter, binary persistence, **and Python bindings**. C++20 core,
+usable from C++ or Python. Research-grade.
 
 GALAHAD exists because time is the weakest part of most AI systems. LLMs hallucinate
 dates. Robots conflate "now" with "last observed." Planners treat the future as an
@@ -38,6 +39,7 @@ branch identity. This is the structural moat.
 Three layers, bottom-up:
 
 ```
+python/      galahad             — pybind11 bindings: full C++ surface from Python
 adapters/    LLMToolAdapter      — JSON tool-call surface for any LLM framework
 persistence/ TemporalPersistence — binary save/load with full round-trip
 engine/      TemporalEngine      — high-level reasoning: explain(), whatHappenedDuring(), knobs
@@ -227,6 +229,78 @@ cycle through tool calls alone:
 No custom C++ integration, no bespoke serialization, no timestamp hallucination.
 That full loop did not exist in any open-source project before GALAHAD.
 
+## Python
+
+`pybind11` bindings expose the full C++ surface — `TemporalCore`,
+`TemporalEngine`, `LLMToolAdapter`, `TemporalPersistence`, plus the value
+types `TemporalEvent`, `TimeWindow`, `AllenRelation`, `Explanation` — with
+idiomatic Python ergonomics (snake_case methods, Python `datetime` for time
+points, `dict` for event data, `None` for optional arguments, `list[dict]`
+returned from the adapter).
+
+Build and import from source (no `pip` package yet):
+
+```bash
+cmake -B build && cmake --build build -j
+PYTHONPATH=build python3 -c "import galahad; print(galahad.__version__)"
+```
+
+Quick-start mirror of the C++ example above:
+
+```python
+from datetime import datetime, timedelta, timezone
+import galahad
+
+core = galahad.TemporalCore()
+engine = galahad.TemporalEngine(core)
+t0 = datetime.now(timezone.utc)
+
+def mk(id_, start, end, recorded, type_, data=None, links=None, branch="main"):
+    e = galahad.TemporalEvent()
+    e.id, e.valid_from, e.valid_to, e.recorded_at = id_, start, end, recorded
+    e.type, e.data, e.causal_links, e.branch_id = type_, data or {}, links or [], branch
+    return e
+
+ms = lambda n: timedelta(milliseconds=n)
+core.add_event(mk("perceive", t0,         t0+ms(5),  t0,        "perception", {"obs": "door_open"}))
+core.add_event(mk("infer",    t0+ms(5),   t0+ms(15), t0+ms(5),  "inference",  {"why": "wind"}, ["perceive"]))
+core.add_event(mk("decide",   t0+ms(15),  t0+ms(20), t0+ms(15), "decision",   {"choose": "close"}, ["infer"]))
+core.add_event(mk("act",      t0+ms(20),  t0+ms(30), t0+ms(200),"action",     {"do": "close"}, ["decide"]))
+
+# Why did the agent act?
+why = engine.explain("act")
+print([c.id for c in why.causes])   # ['perceive', 'infer', 'decide']
+
+# What did the system believe at t0+100ms?
+past = engine.explain("act", t0 + ms(100))
+assert len(past.causes) == 0  # the action had not been recorded yet
+
+# Drive the full agent surface via the LLM adapter from Python:
+adapter = galahad.LLMToolAdapter(core, engine)
+schemas = adapter.get_tool_schemas()          # list of dicts: register with any LLM framework
+result = adapter.handle_tool_call("explain", {"id": "act"})
+assert result["ok"] and len(result["result"]["causes"]) == 3
+
+# Persist state across runs:
+galahad.TemporalPersistence(core).save("state.gtp")
+restored = galahad.TemporalCore()
+galahad.TemporalPersistence(restored).load("state.gtp")
+```
+
+Lifetime is handled automatically — `TemporalEngine`, `LLMToolAdapter`, and
+`TemporalPersistence` each pin their backing `TemporalCore` (and each other
+where relevant) via `py::keep_alive`, so the Python garbage collector will
+not reclaim a core out from under a derived object. Pass a `TemporalCore`
+to a dozen wrappers and they will all keep it alive until the last one is
+dropped.
+
+`python/test_galahad.py` exercises the full surface end-to-end: causal
+chain, bitemporal as-of replay, Allen relations, branching projections,
+refute + explicit-name override, LLM tool-call round-trip (including the
+`nlohmann::json` ↔ Python `dict` caster), and persistence save/load with
+state preservation. Run with
+`PYTHONPATH=build python3 python/test_galahad.py`.
+
 ## API surface
 
 ### Mutation
@@ -318,9 +392,14 @@ internally-optimized skeleton that answers every question in the unified model.
   causal links, branches, refutations, and bitemporal ordering all survive the
   round-trip losslessly. Load bumps the monotonic clock so subsequent writes
   can't regress before loaded events.**
-- Four test binaries: correctness stress at 10k events, 100-branch isolation,
-  full adapter round-trip, full persistence round-trip including causal chain
-  and bitemporal honesty
+- **Python bindings via pybind11: the full C++ surface exposed as idiomatic
+  Python (snake_case methods, `datetime` time points, `dict` event data,
+  automatic lifetime management via `keep_alive`). Includes an inline
+  `nlohmann::json` ↔ Python dict/list type caster so the LLM adapter round-
+  trips JSON naturally from Python.**
+- Four C++ test binaries plus one Python test: correctness stress at 10k
+  events, 100-branch isolation, adapter round-trip, persistence round-trip,
+  and the full Python surface end-to-end
 
 **Not yet:**
 - Incremental/append-only persistence (current v1 format writes full snapshots)
@@ -332,7 +411,7 @@ internally-optimized skeleton that answers every question in the unified model.
 - Confidence propagation (stored, not composed)
 - Interval-tree time index (current sorted-vector is fine until bench says otherwise)
 - Nested/hierarchical branches
-- Language bindings (Python, FFI)
+- Non-Python language bindings (direct C API, Rust, etc.)
 
 **Benchmarks:** `bench/bench_temporal` runs seven workloads end-to-end.
 See the Performance section below. Numbers are honest — single-threaded,
@@ -467,7 +546,8 @@ expressible in any single library in the categories above.
 **Medium term**
 - Counterfactual queries (`whyNot`, hypothetical mutation)
 - Confidence propagation through causal chains
-- Python bindings (pybind11) on top of the existing adapter layer
+- `pip`-installable Python package with wheels (the bindings exist; we just
+  need a `pyproject.toml` + CI wheels)
 - Framework-specific integrations (`galahad-anthropic-agent`, `galahad-langchain`)
 
 **Longer term**

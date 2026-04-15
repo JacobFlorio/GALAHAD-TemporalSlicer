@@ -10,6 +10,13 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# The Python bindings compile into a shared module that links our static
+# libraries. Make sure the static libs are position-independent so the
+# shared-object link succeeds on Linux.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+option(GALAHAD_BUILD_PYTHON "Build the Python bindings" ON)
+
 # ---- third-party: nlohmann_json (fetched) ----
 include(FetchContent)
 set(JSON_BuildTests OFF CACHE INTERNAL "")
@@ -66,3 +73,40 @@ add_executable(bench_temporal bench/main.cpp)
 target_link_libraries(bench_temporal
     PRIVATE temporal_core temporal_engine temporal_persistence
 )
+
+# ---- Python bindings ----
+if(GALAHAD_BUILD_PYTHON)
+    # Use pybind11's modern FindPython so it respects Python3_EXECUTABLE and
+    # does not grab a Python whose dev headers are not installed. Without
+    # this, pybind11's legacy finder can pick python3.11 by name even when
+    # only python3.10 has usable headers.
+    set(PYBIND11_FINDPYTHON ON)
+    if(NOT DEFINED Python3_EXECUTABLE)
+        find_program(Python3_EXECUTABLE NAMES python3.10 python3)
+    endif()
+
+    find_package(pybind11 QUIET)
+    if(NOT pybind11_FOUND)
+        FetchContent_Declare(
+            pybind11
+            GIT_REPOSITORY https://github.com/pybind/pybind11.git
+            GIT_TAG v2.13.6
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(pybind11)
+    endif()
+
+    pybind11_add_module(galahad_py python/galahad.cpp)
+    set_target_properties(galahad_py PROPERTIES
+        OUTPUT_NAME "galahad"
+        PREFIX ""
+    )
+    target_link_libraries(galahad_py
+        PRIVATE
+        temporal_core
+        temporal_engine
+        temporal_adapter
+        temporal_persistence
+        nlohmann_json::nlohmann_json
+    )
+endif()
