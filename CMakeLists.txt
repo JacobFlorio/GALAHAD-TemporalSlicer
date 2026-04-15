@@ -4,6 +4,12 @@ project(GALAHAD_TemporalSlicer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Default to Release if the user didn't explicitly pick a build type.
+# Debug builds still work with `cmake -DCMAKE_BUILD_TYPE=Debug`.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
 # ---- third-party: nlohmann_json (fetched) ----
 include(FetchContent)
 set(JSON_BuildTests OFF CACHE INTERNAL "")
@@ -57,4 +63,6 @@ target_link_libraries(test_persistence PRIVATE temporal_persistence temporal_eng
 
 # ---- bench ----
 add_executable(bench_temporal bench/main.cpp)
-target_link_libraries(bench_temporal PRIVATE temporal_core temporal_engine)
+target_link_libraries(bench_temporal
+    PRIVATE temporal_core temporal_engine temporal_persistence
+)

@@ -334,10 +334,9 @@ internally-optimized skeleton that answers every question in the unified model.
 - Nested/hierarchical branches
 - Language bindings (Python, FFI)
 
-**Benchmarks:** a placeholder harness exists at `bench/bench_temporal`. It does not
-yet publish numbers. Real benchmarks will land after workload design; meanwhile the
-correctness tests stress the time index at 10k events and the branch indices at
-100 branches × 100 events.
+**Benchmarks:** `bench/bench_temporal` runs seven workloads end-to-end.
+See the Performance section below. Numbers are honest — single-threaded,
+single machine, Release build, sanity-checked on every run.
 
 ## Build
 
@@ -353,7 +352,64 @@ cmake --build build -j
 The first `cmake -B build` pulls `nlohmann/json` via `FetchContent` (pinned, shallow).
 Subsequent configures are cache hits.
 
-Requires CMake 3.20+ and a C++20 compiler.
+Requires CMake 3.20+ and a C++20 compiler. The project defaults to Release
+when you don't pick a build type; Debug still works with
+`cmake -B build -DCMAKE_BUILD_TYPE=Debug`.
+
+## Performance
+
+Numbers from `./build/bench_temporal` on a single-threaded commodity machine,
+Release build (`-O3`). The harness warms every index before measuring and
+sanity-checks every result. Reproduce with:
+
+```bash
+cmake -B build && cmake --build build -j && ./build/bench_temporal
+```
+
+| Workload                               |     p50 |      p99 | Notes                                       |
+| -------------------------------------- | ------: | -------: | ------------------------------------------- |
+| `addEvent` bulk (1M events)            |  749 ns |        — | ~1.33M events/sec                           |
+| `get()` over 100k events               |  640 ns |   1.2 µs |                                             |
+| `queryRange` 100 µs window / 100k      |   92 µs |  300 µs  | ~100 events materialized per call           |
+| `queryRange` all 100 branches (100k)   | 12.4 ms |  21.1 ms | full scan + materialize                     |
+| `queryRange` one branch (1k of 100k)   |   33 µs |   66 µs  | **~380× faster — per-branch time index**    |
+| `explain()` at causal depth 1000       |  135 µs |  176 µs  | 1000-step ancestry with full reconstruction |
+| `findRelated(Overlaps)` / 100k         |   89 µs |  379 µs  | family dispatch, walks only overlapping slice |
+| `findRelated(Meets)` / 100k            |  119 µs |  459 µs  |                                             |
+| `findRelated(Precedes)` / 100k         |  435 µs |  647 µs  | ~50k results, cost linear in result size    |
+| `findRelated(PrecededBy)` / 100k       |  437 µs |  861 µs  |                                             |
+| `save` 100k events (binary v1)         |   25 ms |        — | ~4M events/sec, 75 bytes/event              |
+| `load` 100k events (binary v1)         |   48 ms |        — | ~2M events/sec, full reindex on load        |
+
+**What these numbers mean:**
+
+- **Branch isolation is not a filter, it is a structural skip.** Asking
+  "what happened on branch X" takes ~33 µs because the per-branch time
+  index iterates only that branch's 1000 events. The same window across all
+  100 branches takes 12.4 ms because it materializes all 100k. This is the
+  difference between "branch filter applied at query time" and
+  "branch-scoped index consulted by name."
+- **`explain()` at depth 1000 is 135 µs** — ~135 ns per ancestor for full
+  causal traversal plus materialization. An agent can answer "why did this
+  happen" over a thousand-step chain faster than a network round-trip.
+- **`findRelated` algorithmic cost scales with the result set, not the
+  corpus.** Selective relations (`Meets`, `Overlaps`, a handful of results)
+  are an order of magnitude faster than scan-everything relations
+  (`Precedes`, `PrecededBy`, tens of thousands of results). The time index
+  dispatch walks only the relevant slice; final cost is dominated by
+  `resolveEventId` per result.
+- **Persistence v1 is full-snapshot only.** Save is pure serialization
+  (4M events/s); load is intern + reindex (2M events/s) because it runs
+  every event through the normal `addEvent` path. An append-only incremental
+  format is on the near-term roadmap.
+
+The bench harness is single-threaded and the core is single-threaded;
+concurrent readers and a real interval-tree time index are not v0.1 goals.
+Nothing in this section is compared against other systems yet — see the
+"What makes GALAHAD unique" section for why comparative benchmarks against
+XTDB / PyReason / etc. are the wrong frame. Numbers here are
+ourselves-against-ourselves, and they will move as we land incremental
+persistence, per-call materialization opt-outs, and a better time index.
 
 ## Design notes
 
