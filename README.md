@@ -38,11 +38,11 @@ branch identity. This is the structural moat.
 Three layers, bottom-up:
 
 ```
-adapters/  LLMToolAdapter  — JSON tool-call surface for any LLM framework
-engine/    TemporalEngine  — high-level reasoning: explain(), whatHappenedDuring(), knobs
-core/      TemporalCore    — the substrate: bitemporal events, causal DAG, Allen algebra,
-                             branching projections, lifecycle ops, auto-maintained indices
-persistence/ (in design)   — on-disk format, in-progress next milestone
+adapters/    LLMToolAdapter      — JSON tool-call surface for any LLM framework
+persistence/ TemporalPersistence — binary save/load with full round-trip
+engine/      TemporalEngine      — high-level reasoning: explain(), whatHappenedDuring(), knobs
+core/        TemporalCore        — the substrate: bitemporal events, causal DAG, Allen algebra,
+                                    branching projections, lifecycle ops, auto-maintained indices
 ```
 
 `TemporalCore` is a self-contained C++ library. `TemporalEngine` wraps it with
@@ -314,13 +314,16 @@ internally-optimized skeleton that answers every question in the unified model.
 - **LLM tool-call adapter: 17 JSON tools, getToolSchemas + handleToolCall, ISO-8601
   and int64 timestamp round-trip, Allen relations as snake_case strings, structured
   error envelopes. Vendor-neutral.**
-- Three test binaries: correctness stress at 10k events, 100-branch isolation,
-  full adapter round-trip
-
-**In progress:**
-- Persistence (design starting; initial skeleton in `persistence/`)
+- **Persistence: single-file binary format, full save/load round-trip. Events,
+  causal links, branches, refutations, and bitemporal ordering all survive the
+  round-trip losslessly. Load bumps the monotonic clock so subsequent writes
+  can't regress before loaded events.**
+- Four test binaries: correctness stress at 10k events, 100-branch isolation,
+  full adapter round-trip, full persistence round-trip including causal chain
+  and bitemporal honesty
 
 **Not yet:**
+- Incremental/append-only persistence (current v1 format writes full snapshots)
 - Concurrency (single-threaded)
 - Real benchmark harness with published numbers
 - Topological sort in `explain` (currently sorts by `valid_from`; equivalent for
@@ -399,7 +402,8 @@ expressible in any single library in the categories above.
 ## Roadmap
 
 **Near term**
-- Persistence: append-only log + mmap sidecar, crash-safe replay on startup
+- Incremental persistence: append-only log alongside the snapshot format, so
+  long-lived agents don't have to rewrite the full state on every checkpoint
 - Real benchmark harness with workloads: 1M-event insert/query, `explain` at depth 1000,
   mixed Allen+causal queries at 100k events, 100-branch projection scaling
 - Topological sort in `explain` for general DAGs

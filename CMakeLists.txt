@@ -53,7 +53,7 @@ add_executable(test_adapter tests/test_adapter.cpp)
 target_link_libraries(test_adapter PRIVATE temporal_adapter)
 
 add_executable(test_persistence tests/test_persistence.cpp)
-target_link_libraries(test_persistence PRIVATE temporal_persistence)
+target_link_libraries(test_persistence PRIVATE temporal_persistence temporal_engine)
 
 # ---- bench ----
 add_executable(bench_temporal bench/main.cpp)

@@ -99,6 +99,15 @@ public:
 
     TimePoint now() const;
 
+    // Full event snapshot in insertion order. Materializes every stored
+    // event (including refuted branches and historical versions) back into
+    // public TemporalEvent form. Intended for persistence, debugging, and
+    // any consumer that needs to walk the complete state.
+    std::vector<TemporalEvent> getAllEvents() const;
+
+    // Names of branches currently marked refuted.
+    std::vector<std::string> getRefutedBranches() const;
+
 private:
     struct StoredEvent {
         InternalEventId id;

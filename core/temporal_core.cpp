@@ -249,6 +249,11 @@ TemporalCore::pickTimeIndex(const std::optional<InternalBranchId>& branch) const
 // ---------- mutation ----------
 
 void TemporalCore::addEvent(TemporalEvent event) {
+    // Bump the monotonic clock so subsequent now() calls never return a
+    // timestamp earlier than an event already on record. Matters both for
+    // synthetic test timestamps and for round-tripping through persistence
+    // where loaded events can carry recorded_at values from an earlier run.
+    if (event.recorded_at > lastNow) lastNow = event.recorded_at;
     events.push_back(store(std::move(event)));
     updateIndices(events.back(), events.size() - 1);
 }
@@ -724,6 +729,20 @@ void TemporalCore::refuteBranch(const std::string& branch) {
     if (branch == "main") return;
     const auto h = internBranchId(branch);  // allow refuting before use
     refutedBranches.insert(h);
+}
+
+std::vector<TemporalEvent> TemporalCore::getAllEvents() const {
+    std::vector<TemporalEvent> out;
+    out.reserve(events.size());
+    for (const auto& s : events) out.push_back(materialize(s));
+    return out;
+}
+
+std::vector<std::string> TemporalCore::getRefutedBranches() const {
+    std::vector<std::string> out;
+    out.reserve(refutedBranches.size());
+    for (auto h : refutedBranches) out.push_back(resolveBranchId(h));
+    return out;
 }
 
 void TemporalCore::pruneBranch(const std::string& branch) {

@@ -6,21 +6,27 @@ namespace galahad {
 
 // TemporalPersistence is the on-disk layer for TemporalCore.
 //
-// v0 skeleton: this header establishes the public API shape. The real
-// format (append-only log + mmap sidecar for the interning pools and
-// refuted-branch set, crash-safe replay on startup) lands in the next
-// milestone.
+// v1 format: a single binary file containing a header (magic + version)
+// followed by the full event list in insertion order and the set of
+// refuted branches. See persistence.cpp for the exact byte layout.
 //
 // Usage:
+//
 //   TemporalCore core;
-//   TemporalPersistence pers(core);
-//   pers.save("state.gtp");
+//   // ... populate ...
+//   TemporalPersistence(core).save("state.gtp");
+//
 //   // ... restart later ...
 //   TemporalCore restored;
 //   TemporalPersistence(restored).load("state.gtp");
 //
 // `load` is intended for a freshly constructed core; it does not clear
-// any existing state. `save` writes a complete snapshot.
+// existing state before reading, it only appends. Loading into a
+// populated core produces a merge, not a restore.
+//
+// Endianness: v1 writes in host byte order. v0 of GALAHAD targets
+// little-endian platforms (x86_64, ARM64). Cross-endian support is not
+// a goal for this milestone.
 class TemporalPersistence {
 public:
     explicit TemporalPersistence(TemporalCore& core);
@@ -30,12 +36,12 @@ public:
     void save(const std::string& path) const;
 
     // Load state from `path` into the core. Throws std::runtime_error on
-    // missing file, parse error, or version mismatch.
+    // missing file, bad magic, version mismatch, or truncated payload.
     void load(const std::string& path);
 
     // Format version written by save() and checked by load(). Bumped
     // whenever the on-disk layout changes in a non-compatible way.
-    static constexpr int kFormatVersion = 0;
+    static constexpr std::uint32_t kFormatVersion = 1;
 
 private:
     TemporalCore& core_;
