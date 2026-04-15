@@ -289,9 +289,11 @@ python -c "import galahad; print(galahad.__version__)"
 ```
 
 Live at https://pypi.org/project/galahad-temporal/ . Current release is
-`0.1.1` — the first install compiles from source (~1 minute) because
-prebuilt wheels via `cibuildwheel` are on the near-term roadmap. Or
-install straight from the repo:
+**`0.2.2`**, and `pip install galahad-temporal` fetches a **prebuilt
+wheel** (no compile step) on Linux x86_64 `manylinux_2_28` and macOS
+arm64, for CPython 3.8 through 3.12. Other platforms fall through to
+the sdist and compile from source (about a minute). Or install straight
+from the repo:
 
 ```bash
 git clone https://github.com/JacobFlorio/GALAHAD-TemporalSlicer
@@ -374,29 +376,44 @@ refute + explicit-name override, LLM tool-call round-trip (including the
 state preservation. Run with
 `PYTHONPATH=build python3 python/test_galahad.py`.
 
-### Example: Claude reasoning through GALAHAD
+### Examples: Claude reasoning through GALAHAD
 
-`examples/anthropic_demo.py` wires the adapter straight into the
-Anthropic SDK. It pre-populates the canonical four-step agent trace
-(perceive → infer → decide → act, with a late-arriving action) and
-asks Claude two questions:
+Two end-to-end demo scripts wire the adapter straight into the
+Anthropic SDK. Both support a dry-run mode that exercises the full
+GALAHAD surface without calling the API — set `GALAHAD_DEMO_DRY_RUN=1`
+or simply omit the `ANTHROPIC_API_KEY` environment variable to use it.
 
-1. Why did the action happen? Walk the causal chain.
-2. What would the system have believed at `t0+100ms`, when the action
-   had not yet been recorded? Use `as_of`.
+**`examples/anthropic_demo.py`** — the counterfactual demo. Pre-populates
+a perceive → infer → decide → act chain with a late-arriving action
+plus two competing projection branches (`close_door` confidence 0.7,
+`ignore` confidence 0.3, the latter refuted). Asks Claude four question
+shapes in one prompt: backward causal (`explain`), bitemporal replay
+(`explain` with `as_of`), counterfactual (`why_not`), and hypothetical
+mutation (`explain_with`). Claude handles the four questions in four
+turns by firing tool calls in parallel across independent questions.
 
-Claude is handed all 17 GALAHAD tools via `get_tool_schemas()` and runs
+**`examples/traffic_agent_demo.py`** — the richer 6-tick pedestrian-at-
+crosswalk scenario. Pre-populates a full projection lifecycle across
+6 ticks: three competing plans at tick 1, refutation of the risky ones
+at tick 2, a new premature-start projection at tick 3, promotion of
+`wait_for_green` + refutation of `start_early` at tick 4, promotion of
+`walk_across` at tick 5, crossing complete at tick 6. Asks six
+introspection questions that span the entire adapter surface including
+`get_refuted_branches`, `get_projections`, and the full counterfactual
+path.
+
+Claude is handed all GALAHAD tools via `get_tool_schemas()` and runs
 an agent loop: for each `tool_use` in the response, the script calls
 `adapter.handle_tool_call(name, args)`, serializes the JSON result
 back as a `tool_result` block, and continues until Claude emits
-`end_turn`. The second question specifically exercises the bitemporal
-distinction that makes GALAHAD structurally different from a plain
-event store — "what was true in the world" vs "what the system knew."
+`end_turn`.
 
 ```bash
-# Dry run: verifies the full GALAHAD + adapter + Python path
-# without an API key (smoke-tests explain, as_of replay, find_related).
-PYTHONPATH=build python3 examples/anthropic_demo.py
+# Dry run (no API key needed): exercises the adapter + Python path
+# end-to-end with smoke assertions on explain, as_of replay,
+# find_related, why_not, explain_with, and the introspection surface.
+python3 examples/anthropic_demo.py           # counterfactual demo
+python3 examples/traffic_agent_demo.py       # 6-tick traffic agent demo
 
 # Real run:
 pip install anthropic
@@ -406,7 +423,25 @@ PYTHONPATH=build python3 examples/anthropic_demo.py
 
 The dry-run mode is the important part for CI and for anyone who
 wants to verify the demo works before spending tokens on it — no API
-key needed, prints the three smoke assertions, exits cleanly.
+key needed, prints the smoke assertions, exits cleanly.
+
+**Verbatim transcripts** of both demos running live against real
+PyPI releases are committed under
+[`examples/transcripts/`](examples/transcripts/). They are the
+single most concrete evidence that GALAHAD's reasoning surface works
+with a production LLM on the other end: Claude Opus 4.6 actually
+walked the backward causal, bitemporal replay, counterfactual, and
+hypothetical question shapes in one session, invented a
+discovery-then-query design pattern on the spot, computed a new
+metric called **promotion latency** (the delay between a projection
+being recorded and being promoted to ground truth), and surfaced a
+latent duplicate-id bug in `getEffects` that was subsequently fixed
+in v0.2.2. Start with
+[`counterfactual_demo_transcript.md`](examples/transcripts/counterfactual_demo_transcript.md)
+for the short 4-turn run, then
+[`traffic_agent_demo_transcript.md`](examples/transcripts/traffic_agent_demo_transcript.md)
+for the longer 6-question decision-tree reconstruction with an ASCII
+diagram.
 
 ## API surface
 
@@ -493,9 +528,13 @@ std::vector<CounterfactualExplanation>
 
 ## Current status
 
-**This is a v0.1 research core.** It is not a database, not persistent, not yet
-concurrent, not yet benchmarked against production systems. It is a complete, correct,
-internally-optimized skeleton that answers every question in the unified model.
+**v0.2.2 — research core, feature-complete for the four canonical
+question shapes (backward causal, bitemporal replay, counterfactual,
+hypothetical mutation), live on PyPI with prebuilt wheels, validated
+in two separate live-LLM runs committed as transcripts.** Not yet a
+database, not persistent across process lifetimes with an append-only
+log (only full snapshots today), not concurrent, not ported to
+Windows. The forward path is documented in the roadmap below.
 
 **Done:**
 - Bitemporal event model with valid + transaction time
@@ -512,31 +551,52 @@ internally-optimized skeleton that answers every question in the unified model.
 - Per-branch time indices for fast range and Allen queries on any single branch
 - Flat, sorted-vector event data field — one allocation per event's metadata
 - Lazy-rebuilt indices behind dirty flags; no stale-graph footguns
-- **LLM tool-call adapter: 17 JSON tools, getToolSchemas + handleToolCall, ISO-8601
-  and int64 timestamp round-trip, Allen relations as snake_case strings, structured
-  error envelopes. Vendor-neutral.**
-- **Persistence: single-file binary format, full save/load round-trip. Events,
-  causal links, branches, refutations, and bitemporal ordering all survive the
-  round-trip losslessly. Load bumps the monotonic clock so subsequent writes
-  can't regress before loaded events.**
-- **Python bindings via pybind11: the full C++ surface exposed as idiomatic
-  Python (snake_case methods, `datetime` time points, `dict` event data,
-  automatic lifetime management via `keep_alive`). Includes an inline
-  `nlohmann::json` ↔ Python dict/list type caster so the LLM adapter round-
-  trips JSON naturally from Python.**
-- Four C++ test binaries plus one Python test: correctness stress at 10k
-  events, 100-branch isolation, adapter round-trip, persistence round-trip,
-  and the full Python surface end-to-end
+- **LLM tool-call adapter: 22 vendor-neutral JSON tools
+  (`getToolSchemas` + `handleToolCall`), ISO-8601 and int64 timestamp
+  round-trip, Allen relations as snake_case strings, structured
+  error envelopes. Every tool is documented with an Anthropic-style
+  `input_schema` so the LLM picks the right tool from the description
+  alone.**
+- **Counterfactual query primitives: `whyNot(id)` returns refuted
+  projection branches with their would-have-been causal chains;
+  `explainWith(target, mutation)` clones the core, applies a
+  hypothetical, and explains the target in the fork without touching
+  the real store. Exposed as both C++ + Python methods and as the
+  `why_not` / `explain_with` JSON tools.**
+- **Persistence: single-file binary format, full save/load round-trip.
+  Events, causal links, branches, refutations, and bitemporal ordering
+  all survive the round-trip losslessly. Load bumps the monotonic clock
+  so subsequent writes can't regress before loaded events.**
+- **Python bindings via pybind11: the full C++ surface exposed as
+  idiomatic Python (snake_case methods, `datetime` time points, `dict`
+  event data, automatic lifetime management via `keep_alive`). Custom
+  timezone-aware time_point caster rejects naive datetimes and
+  round-trips UTC via `.timestamp()`. Inline `nlohmann::json` ↔ Python
+  dict/list type caster so the LLM adapter round-trips JSON naturally.**
+- **PyPI distribution: `pip install galahad-temporal` fetches a
+  prebuilt wheel on Linux x86_64 and macOS arm64 for CPython 3.8–3.12.
+  Fully automated release pipeline via GitHub Actions + cibuildwheel +
+  trusted publishing on every `v*` tag push.**
+- **Live LLM transcripts in
+  [`examples/transcripts/`](examples/transcripts/) — verbatim captures
+  of Claude Opus 4.6 running the demos against live PyPI releases.**
+- Four C++ test binaries plus one Python test: 10k-event correctness
+  stress, 100-branch isolation, counterfactual + promotion-dedupe
+  regression, adapter JSON round-trip, persistence round-trip, and the
+  full Python surface end-to-end.
 
 **Not yet:**
-- Incremental/append-only persistence (current v1 format writes full snapshots)
+- Windows wheels (the adapter uses POSIX `strptime`/`gmtime_r`/`timegm`;
+  next focused session after the current stopping point)
+- Incremental/append-only persistence (current v1 format writes full
+  snapshots)
 - Concurrency (single-threaded)
-- Real benchmark harness with published numbers
-- Topological sort in `explain` (currently sorts by `valid_from`; equivalent for
-  DAGs that respect causal-temporal ordering, not general)
-- Counterfactual queries (`whyNot`, hypothetical mutation)
+- Topological sort in `explain` for general DAGs (current sort by
+  `valid_from` is equivalent only for DAGs that respect causal-temporal
+  ordering)
 - Confidence propagation (stored, not composed)
-- Interval-tree time index (current sorted-vector is fine until bench says otherwise)
+- Interval-tree time index (current sorted-vector is fine until bench
+  says otherwise)
 - Nested/hierarchical branches
 - Non-Python language bindings (direct C API, Rust, etc.)
 
@@ -664,20 +724,32 @@ expressible in any single library in the categories above.
 ## Roadmap
 
 **Near term**
-- Windows support: port the adapter's POSIX time APIs (`strptime`,
-  `gmtime_r`, `timegm`) to MSVC equivalents so `cibuildwheel` can
-  add Windows wheels to the release matrix
-- Incremental persistence: append-only log alongside the snapshot format, so
-  long-lived agents don't have to rewrite the full state on every checkpoint
-- Topological sort in `explain` for general DAGs
+- **Windows support (next focused session):** port the adapter's POSIX
+  time APIs (`strptime`, `gmtime_r`, `timegm`) to MSVC equivalents so
+  `cibuildwheel` can add Windows wheels to the release matrix.
+- Incremental persistence: append-only log alongside the snapshot format,
+  so long-lived agents don't have to rewrite the full state on every
+  checkpoint.
+- Topological sort in `explain` for general DAGs.
+- Formalize **promotion latency** as a documented concept. Claude
+  computed this metric unprompted during the traffic-light demo run
+  (see `examples/transcripts/traffic_agent_demo_transcript.md`): it's
+  the delay between a projection being recorded and being promoted to
+  ground truth — effectively "how long the agent held a prediction
+  before reality confirmed it." Worth a convenience method on
+  `TemporalCore` once the concept is written down.
 
 **Medium term**
-- Counterfactual queries (`whyNot`, hypothetical mutation)
-- Confidence propagation through causal chains
-- PyPI release (source install works via `pip install .` today; prebuilt
-  wheels for Linux/macOS/Windows via cibuildwheel next)
-- More framework-specific examples alongside `examples/anthropic_demo.py`
-  (LangChain, OpenAI function-calling, tool-use harness for local models)
+- Confidence propagation through causal chains (the `confidence` field
+  on `TemporalEvent` is stored and round-trips through every layer,
+  but no engine operation currently composes or reasons about
+  probability — this is where GALAHAD would start answering
+  probability-weighted "how likely was this path?" questions).
+- More framework-specific demo scripts alongside
+  `examples/anthropic_demo.py` and `examples/traffic_agent_demo.py`
+  (LangChain, OpenAI function-calling, local-model tool-use harness).
+- Multi-agent scenarios — two agents sharing a GALAHAD store with
+  cross-agent counterfactual reasoning.
 
 **Longer term**
 - Concurrent readers / writer-exclusion
