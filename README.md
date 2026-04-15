@@ -238,8 +238,17 @@ idiomatic Python ergonomics (snake_case methods, Python `datetime` for time
 points, `dict` for event data, `None` for optional arguments, `list[dict]`
 returned from the adapter).
 
-**Install from source with pip** (works today; a PyPI release is on the
-near-term roadmap):
+**Install from PyPI:**
+
+```bash
+pip install galahad-temporal                  # or: pip install "galahad-temporal[anthropic]"
+python -c "import galahad; print(galahad.__version__)"
+```
+
+Live at https://pypi.org/project/galahad-temporal/ . Current release is
+`0.1.1` — the first install compiles from source (~1 minute) because
+prebuilt wheels via `cibuildwheel` are on the near-term roadmap. Or
+install straight from the repo:
 
 ```bash
 git clone https://github.com/JacobFlorio/GALAHAD-TemporalSlicer

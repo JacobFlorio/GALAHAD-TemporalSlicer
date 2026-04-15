@@ -190,7 +190,81 @@ def main():
         assert len(past2.causes) == 0
     print("  persistence save/load round-trip OK")
 
-    print("\ntest_galahad: OK (core + engine + adapter + persistence)")
+    # ------------------------------------------------------------------
+    # Regression test for the timezone offset bug (fixed in 0.1.1).
+    #
+    # pybind11/chrono.h's default time_point caster silently treated
+    # Python datetimes as local wall-clock time, so on a UTC-4 machine
+    # a tz-aware `12:00 UTC` datetime became `12:00 local = 16:00 UTC`
+    # as a raw C++ instant. The round-trip through the binding
+    # compensated, so pure-Python tests passed. But the LLM adapter's
+    # ISO serialization (via gmtime_r) saw the shifted instant and
+    # returned wrong UTC strings to callers.
+    #
+    # These assertions catch that bug directly and are locale-
+    # independent — they work on any machine regardless of local tz.
+    # ------------------------------------------------------------------
+    print()
+    print("Timezone round-trip (bug fixed in 0.1.1):")
+
+    core2 = galahad.TemporalCore()
+    engine2 = galahad.TemporalEngine(core2)
+    adapter2 = galahad.LLMToolAdapter(core2, engine2)
+
+    # A fixed, known UTC instant.
+    fixed = datetime(2026, 1, 15, 12, 0, 0, 500_000, tzinfo=timezone.utc)
+
+    ev = galahad.TemporalEvent()
+    ev.id = "ts_test"
+    ev.valid_from = fixed
+    ev.valid_to = fixed + timedelta(milliseconds=5)
+    ev.recorded_at = fixed
+    ev.type = "test"
+    core2.add_event(ev)
+
+    # 1) Round-trip via the binding. Returned datetime must be tz-aware
+    #    and represent the same instant.
+    got = core2.get("ts_test")
+    assert got is not None
+    assert got.valid_from.tzinfo is not None, \
+        "binding returned naive datetime; custom caster not active"
+    assert got.valid_from.timestamp() == fixed.timestamp(), \
+        f"binding instant mismatch: {got.valid_from} != {fixed}"
+    print(f"  binding round-trip OK  ({got.valid_from.isoformat()})")
+
+    # 2) Round-trip via the LLM adapter. The adapter serializes via
+    #    gmtime_r which always produces UTC. If the stored C++ instant
+    #    was shifted (the bug), the ISO hour here would not match the
+    #    input hour. This is the locale-independent catch.
+    result = adapter2.handle_tool_call("get_event", {"id": "ts_test"})
+    assert result["ok"] is True
+    got_iso = result["result"]["valid_from"]
+    # Parse the adapter's ISO string (may end in 'Z' or '+00:00').
+    got_dt = datetime.fromisoformat(got_iso.replace("Z", "+00:00"))
+    assert got_dt.timestamp() == fixed.timestamp(), \
+        f"adapter instant mismatch: {got_iso} != {fixed.isoformat()}"
+    # Explicit hour check: fixed is 12:00 UTC; adapter must echo 12.
+    assert "T12:00:00" in got_iso, \
+        f"adapter should report hour 12 for 12:00 UTC input, got {got_iso}"
+    print(f"  adapter ISO round-trip OK  ({got_iso})")
+
+    # 3) Naive datetimes are rejected cleanly, not silently shifted.
+    try:
+        naive = datetime(2026, 1, 15, 12, 0, 0)  # no tzinfo
+        bad = galahad.TemporalEvent()
+        bad.id = "naive"
+        bad.valid_from = naive
+        # If the caster were still buggy, the above line would silently
+        # accept the naive datetime and shift it. With the new caster it
+        # raises ValueError.
+        assert False, "naive datetime should have been rejected"
+    except ValueError as exc:
+        assert "naive datetime" in str(exc).lower()
+        print(f"  naive datetime correctly rejected: {exc}")
+
+    print("  timezone round-trip OK")
+
+    print("\ntest_galahad: OK (core + engine + adapter + persistence + timezone)")
 
 
 if __name__ == "__main__":

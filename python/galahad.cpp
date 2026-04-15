@@ -10,6 +10,14 @@
 // becomes a json object inside C++; the returned envelope becomes a
 // Python dict back.
 //
+// Timezone-correct chrono caster: pybind11/chrono.h's default caster
+// for `std::chrono::system_clock::time_point` treats Python datetimes
+// as local wall-clock time and silently corrupts cross-timezone data.
+// We replace it with a caster that REQUIRES tz-aware datetimes on the
+// Python->C++ side and returns tz-aware UTC datetimes on the way back.
+// Naive datetimes are rejected with a clear error instead of being
+// silently misinterpreted.
+//
 // Lifetime management: TemporalEngine, LLMToolAdapter, and
 // TemporalPersistence all hold references to a TemporalCore (and to
 // each other where relevant). Without explicit keep_alive directives,
@@ -20,7 +28,9 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <pybind11/chrono.h>
+// Deliberately NOT including <pybind11/chrono.h>. Its default
+// time_point caster uses local wall-clock time and corrupts timezones.
+// The custom caster below replaces it.
 
 #include "temporal_core.h"
 #include "temporal_engine.h"
@@ -29,8 +39,81 @@
 
 #include <nlohmann/json.hpp>
 
+#include <datetime.h>   // CPython datetime C API (PyDateTime_IMPORT, PyDateTime_Check)
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+
 namespace py = pybind11;
 using namespace galahad;
+
+// ---------- std::chrono::system_clock::time_point <-> Python datetime ----------
+//
+// pybind11/chrono.h's default time_point caster uses local wall-clock
+// time: for a tz-aware Python datetime at 12:00 UTC on a UTC-4 machine,
+// it stores the TimePoint as the instant that represents 12:00 LOCAL
+// time (which is 16:00 UTC as a raw instant). The round-trip through
+// the binding silently undoes the offset so pure-Python workflows
+// appear to work, but any code path that reads the TimePoint directly
+// (the LLM adapter's ISO serialization via `gmtime_r`, for example)
+// sees the shifted value.
+//
+// This caster fixes it end-to-end:
+//   Python -> C++: REQUIRE a tz-aware datetime. Use `.timestamp()`
+//                  which returns UTC epoch seconds regardless of
+//                  tzinfo. Naive datetimes are rejected with a clear
+//                  error because silent local-time interpretation is
+//                  exactly what caused the original bug.
+//   C++ -> Python: return a tz-aware datetime constructed via
+//                  `datetime.fromtimestamp(ts, tz=utc)`. Never naive.
+//
+// Precision: Python datetime has microsecond resolution. The caster
+// round-trips with microsecond fidelity via `llround(ts * 1e6)`.
+// For timestamps up to ~year 2250 this multiplication is exact in
+// double precision. Sub-microsecond values from C++ are truncated.
+namespace pybind11 { namespace detail {
+
+template <>
+struct type_caster<std::chrono::system_clock::time_point> {
+public:
+    PYBIND11_TYPE_CASTER(std::chrono::system_clock::time_point,
+                         const_name("datetime.datetime"));
+
+    bool load(handle src, bool /*convert*/) {
+        if (!src || src.is_none()) return false;
+        if (!PyDateTime_Check(src.ptr())) return false;
+
+        // Refuse naive datetimes — they are the reason this caster exists.
+        auto tz = getattr(src, "tzinfo", none());
+        if (tz.is_none()) {
+            throw value_error(
+                "GALAHAD time_point caster: naive datetime is ambiguous. "
+                "Pass a tz-aware datetime, e.g. datetime.now(timezone.utc).");
+        }
+
+        // .timestamp() returns UTC epoch seconds for any tz-aware datetime.
+        double ts = src.attr("timestamp")().cast<double>();
+        auto us = static_cast<std::int64_t>(std::llround(ts * 1e6));
+        value = std::chrono::system_clock::time_point(
+            std::chrono::microseconds(us));
+        return true;
+    }
+
+    static handle cast(const std::chrono::system_clock::time_point& src,
+                       return_value_policy /*policy*/,
+                       handle /*parent*/) {
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                      src.time_since_epoch()).count();
+        double ts = static_cast<double>(us) / 1e6;
+
+        auto datetime_mod = module_::import("datetime");
+        auto utc = datetime_mod.attr("timezone").attr("utc");
+        auto dt = datetime_mod.attr("datetime").attr("fromtimestamp")(ts, utc);
+        return dt.release();
+    }
+};
+
+}} // namespace pybind11::detail
 
 // ---------- nlohmann::json <-> Python caster ----------
 //
@@ -123,6 +206,11 @@ public:
 // ---------- module ----------
 
 PYBIND11_MODULE(galahad, m) {
+    // Initialize the CPython datetime C API once per module load. Without
+    // this, PyDateTime_Check in the time_point caster dereferences null
+    // function pointers and crashes.
+    PyDateTime_IMPORT;
+
     m.doc() =
         "GALAHAD-TemporalSlicer: unified temporal reasoning engine.\n"
         "Bitemporal events, causal DAG, Allen interval algebra, branching\n"
@@ -265,5 +353,5 @@ PYBIND11_MODULE(galahad, m) {
         .def_readonly_static("format_version",
                              &TemporalPersistence::kFormatVersion);
 
-    m.attr("__version__") = "0.1";
+    m.attr("__version__") = "0.1.1";
 }
