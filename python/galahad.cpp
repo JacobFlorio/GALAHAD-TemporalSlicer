@@ -353,5 +353,5 @@ PYBIND11_MODULE(galahad, m) {
         .def_readonly_static("format_version",
                              &TemporalPersistence::kFormatVersion);
 
-    m.attr("__version__") = "0.1.2";
+    m.attr("__version__") = "0.1.3";
 }

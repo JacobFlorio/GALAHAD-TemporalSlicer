@@ -17,12 +17,20 @@ jobs:
       fail-fast: false
       matrix:
         # ubuntu-latest  -> Linux manylinux_2_28 x86_64 (gcc-toolset-14)
-        # macos-13       -> macOS x86_64 (Intel)
-        # macos-14       -> macOS arm64 (Apple Silicon)
-        # Windows is intentionally skipped — the adapter uses POSIX time
-        # APIs (strptime / gmtime_r / timegm) that are not in the MSVC
-        # CRT. Windows wheels will land when the adapter is portable.
-        os: [ubuntu-latest, macos-13, macos-14]
+        # macos-14       -> macOS arm64 (Apple Silicon, M1+)
+        #
+        # macos-13 (Intel) was in this matrix for v0.1.2 but the runner
+        # label is no longer accepted by GitHub Actions ("macos-13-us-
+        # default not supported"). Intel macOS users can still install
+        # from the sdist via `pip install galahad-temporal` — pip will
+        # compile on their machine. When a verified Intel macOS runner
+        # label is available again, it can be re-added here.
+        #
+        # Windows is also intentionally skipped — the adapter uses
+        # POSIX time APIs (strptime / gmtime_r / timegm) that are not
+        # in the MSVC CRT. Windows wheels will land when the adapter
+        # is portable.
+        os: [ubuntu-latest, macos-14]
 
     steps:
     - name: Checkout

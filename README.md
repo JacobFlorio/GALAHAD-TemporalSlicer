@@ -662,10 +662,14 @@ MSVC CRT equivalents.
 The `v*` tag triggers `wheels.yml`, which:
 
 - Uses [cibuildwheel](https://cibuildwheel.readthedocs.io/) to build
-  CPython 3.8–3.12 wheels on three native runners:
+  CPython 3.8–3.12 wheels on two native runners:
   Linux `manylinux_2_28` x86_64 (via `gcc-toolset-14`, new enough for
-  C++20), macOS x86_64 (`macos-13`, Intel), and macOS arm64 (`macos-14`,
-  Apple Silicon).
+  C++20) and macOS arm64 (`macos-14`, Apple Silicon). Intel macOS is
+  source-install only for now — the GitHub Actions `macos-13` runner
+  label was retired during v0.1.2, and Intel macOS users can still
+  `pip install galahad-temporal` to compile from the sdist locally.
+  When a verified Intel macOS runner label lands, it will be added
+  back to the matrix.
 - Runs `python/test_galahad.py` against every built wheel via
   `CIBW_TEST_COMMAND` before the wheel leaves the runner. The timezone
   regression that cost us 0.1.1 would have been caught here.
