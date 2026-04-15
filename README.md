@@ -1,6 +1,8 @@
 # GALAHAD-TemporalSlicer
 
-A unified temporal reasoning core for AI systems. C++20. In-memory. Research-grade.
+A unified temporal reasoning core for AI systems: bitemporal storage, causal DAG,
+Allen interval algebra, branching projections, lifecycle, **and a first-class LLM
+tool-call adapter**. C++20. In-memory. Research-grade.
 
 GALAHAD exists because time is the weakest part of most AI systems. LLMs hallucinate
 dates. Robots conflate "now" with "last observed." Planners treat the future as an
@@ -36,15 +38,18 @@ branch identity. This is the structural moat.
 Three layers, bottom-up:
 
 ```
+adapters/  LLMToolAdapter  — JSON tool-call surface for any LLM framework
 engine/    TemporalEngine  — high-level reasoning: explain(), whatHappenedDuring(), knobs
 core/      TemporalCore    — the substrate: bitemporal events, causal DAG, Allen algebra,
                              branching projections, lifecycle ops, auto-maintained indices
-adapters/  (planned)       — bindings to LLMs, agents, robotics, persistence
+persistence/ (in design)   — on-disk format, in-progress next milestone
 ```
 
 `TemporalCore` is a self-contained C++ library. `TemporalEngine` wraps it with
-higher-level reasoning primitives and is the intended consumer API. Adapters will
-translate between GALAHAD's model and whatever the external system speaks.
+higher-level reasoning primitives and is the intended consumer API. `LLMToolAdapter`
+exposes the reasoning surface as a vendor-neutral JSON tool-call API so any agent
+framework (Anthropic, OpenAI, LangChain, custom loops) can reach for GALAHAD with
+zero custom glue.
 
 ### What's in the core
 
@@ -86,6 +91,29 @@ translate between GALAHAD's model and whatever the external system speaks.
   system's past belief state.
 - **`whatHappenedDuring(window)`** — events overlapping a time window, branch-filtered,
   returned as full `TemporalEvent` objects.
+
+### What's in the adapter
+
+- **`LLMToolAdapter`** — a vendor-neutral JSON tool-call surface over the full
+  reasoning API. Two entry points:
+  - **`getToolSchemas()`** returns an Anthropic-style array of
+    `{name, description, input_schema}` descriptors any LLM framework can register.
+    Seventeen tools: `now`, `add_event`, `add_projection`, `get_event`, `query_range`,
+    `explain`, `what_happened_during`, `get_ancestors`, `get_descendants`,
+    `get_causes`, `get_effects`, `find_related`, `promote_branch`, `refute_branch`,
+    `prune_branch`, `is_refuted`, and `list_tools`.
+  - **`handleToolCall(name, args)`** dispatches and returns a structured envelope:
+    `{"ok": true, "result": ...}` on success or `{"ok": false, "error": "..."}` on
+    failure. Every exception path is caught and surfaced as JSON — the LLM never
+    sees a crash.
+- **Timestamp round-tripping.** Every result carries both ISO 8601 UTC strings
+  (`"2026-04-14T12:00:00.000Z"`) and int64 nanoseconds since epoch. Inputs accept
+  either. LLMs read ISO fluently; the int64 form guarantees exact round-trip for
+  agent tool-chaining.
+- **Allen relation names** are exposed as snake_case strings (`precedes`, `meets`,
+  `during`, `met_by`, etc.) so a model reaches for them by their natural names.
+- **Dependency:** `nlohmann/json v3.11.3`, pulled via CMake `FetchContent`. Zero
+  manual setup.
 
 ## Quick start
 
@@ -154,6 +182,50 @@ int main() {
     // promoted main-branch copy.
 }
 ```
+
+## LLM integration
+
+Any tool-calling LLM framework can drive GALAHAD with a few lines of glue. The
+adapter speaks vendor-neutral JSON, so the same code wires up to Anthropic SDK
+tool_use, OpenAI function calling, LangChain, or a custom agent loop.
+
+```cpp
+#include "llm_tool_adapter.h"
+using namespace galahad;
+using nlohmann::json;
+
+TemporalCore core;
+TemporalEngine engine(core);
+LLMToolAdapter adapter(core, engine);
+
+// 1. Register tools with your LLM framework.
+json schemas = adapter.getToolSchemas();
+// schemas is an array of 17 {name, description, input_schema} objects.
+// Hand it to your framework's tool registry.
+
+// 2. Dispatch the LLM's tool calls.
+//    When the model picks a tool, forward the JSON args:
+json result = adapter.handleToolCall(
+    "explain",
+    json{{"id", "act"}}
+);
+// result == {"ok": true, "result": {"causes": [...], "completed_before_target": true}}
+```
+
+An agent loop using GALAHAD walks the full perceive → project → observe → reconcile
+cycle through tool calls alone:
+
+1. `now` — get a monotonic transaction-time anchor
+2. `add_event` — record a perception with causal links and metadata
+3. `explain` — ask the core *why* a downstream event happened, read the chain back
+4. `add_projection` — stash a hypothetical future on a named branch with confidence
+5. `query_range` with `branch: "<name>"` — inspect a specific projected future
+6. `promote_branch` / `refute_branch` — reconcile projection with observation
+7. Ask `explain` again with `as_of: <earlier time>` — replay the system's past
+   belief state, honestly
+
+No custom C++ integration, no bespoke serialization, no timestamp hallucination.
+That full loop did not exist in any open-source project before GALAHAD.
 
 ## API surface
 
@@ -239,10 +311,16 @@ internally-optimized skeleton that answers every question in the unified model.
 - Per-branch time indices for fast range and Allen queries on any single branch
 - Flat, sorted-vector event data field — one allocation per event's metadata
 - Lazy-rebuilt indices behind dirty flags; no stale-graph footguns
-- Two test binaries: correctness stress at 10k events and 100-branch isolation
+- **LLM tool-call adapter: 17 JSON tools, getToolSchemas + handleToolCall, ISO-8601
+  and int64 timestamp round-trip, Allen relations as snake_case strings, structured
+  error envelopes. Vendor-neutral.**
+- Three test binaries: correctness stress at 10k events, 100-branch isolation,
+  full adapter round-trip
+
+**In progress:**
+- Persistence (design starting; initial skeleton in `persistence/`)
 
 **Not yet:**
-- Persistence (on-disk, mmap, serialization)
 - Concurrency (single-threaded)
 - Real benchmark harness with published numbers
 - Topological sort in `explain` (currently sorts by `valid_from`; equivalent for
@@ -265,8 +343,12 @@ cmake -B build
 cmake --build build -j
 ./build/test_temporal
 ./build/test_engine
+./build/test_adapter
 ./build/bench_temporal
 ```
+
+The first `cmake -B build` pulls `nlohmann/json` via `FetchContent` (pinned, shallow).
+Subsequent configures are cache hits.
 
 Requires CMake 3.20+ and a C++20 compiler.
 
@@ -317,17 +399,16 @@ expressible in any single library in the categories above.
 ## Roadmap
 
 **Near term**
+- Persistence: append-only log + mmap sidecar, crash-safe replay on startup
 - Real benchmark harness with workloads: 1M-event insert/query, `explain` at depth 1000,
   mixed Allen+causal queries at 100k events, 100-branch projection scaling
 - Topological sort in `explain` for general DAGs
-- First adapter: thin wrapper exposing `explain` and `whatHappenedDuring` to an LLM
-  tool-call surface
 
 **Medium term**
-- Persistence layer (mmap-friendly serialization of the event deque + pools)
 - Counterfactual queries (`whyNot`, hypothetical mutation)
 - Confidence propagation through causal chains
-- Python bindings
+- Python bindings (pybind11) on top of the existing adapter layer
+- Framework-specific integrations (`galahad-anthropic-agent`, `galahad-langchain`)
 
 **Longer term**
 - Concurrent readers / writer-exclusion

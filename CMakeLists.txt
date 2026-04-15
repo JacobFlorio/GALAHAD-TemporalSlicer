@@ -36,6 +36,12 @@ target_link_libraries(temporal_adapter
     PUBLIC temporal_core temporal_engine nlohmann_json::nlohmann_json
 )
 
+add_library(temporal_persistence
+    persistence/persistence.cpp
+)
+target_include_directories(temporal_persistence PUBLIC persistence)
+target_link_libraries(temporal_persistence PUBLIC temporal_core)
+
 # ---- tests ----
 add_executable(test_temporal tests/test_temporal.cpp)
 target_link_libraries(test_temporal PRIVATE temporal_core)
@@ -45,6 +51,9 @@ target_link_libraries(test_engine PRIVATE temporal_engine)
 
 add_executable(test_adapter tests/test_adapter.cpp)
 target_link_libraries(test_adapter PRIVATE temporal_adapter)
+
+add_executable(test_persistence tests/test_persistence.cpp)
+target_link_libraries(test_persistence PRIVATE temporal_persistence)
 
 # ---- bench ----
 add_executable(bench_temporal bench/main.cpp)
