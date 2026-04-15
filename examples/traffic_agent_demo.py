@@ -376,7 +376,12 @@ for turn in range(MAX_TURNS):
     print(f"\n--- Turn {turn + 1} ---")
     response = client.messages.create(
         model=MODEL,
-        max_tokens=4096,
+        # 8192 because the six-question synthesis at the end of the
+        # traffic-light scenario regularly produces a ~6k-token summary
+        # (tables, ASCII decision tree, per-tick narrative). The first
+        # real run hit max_tokens=4096 mid-summary and truncated the
+        # tick-by-tick wrap-up.
+        max_tokens=8192,
         tools=tools,
         messages=messages,
     )
