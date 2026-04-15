@@ -301,6 +301,40 @@ refute + explicit-name override, LLM tool-call round-trip (including the
 state preservation. Run with
 `PYTHONPATH=build python3 python/test_galahad.py`.
 
+### Example: Claude reasoning through GALAHAD
+
+`examples/anthropic_demo.py` wires the adapter straight into the
+Anthropic SDK. It pre-populates the canonical four-step agent trace
+(perceive → infer → decide → act, with a late-arriving action) and
+asks Claude two questions:
+
+1. Why did the action happen? Walk the causal chain.
+2. What would the system have believed at `t0+100ms`, when the action
+   had not yet been recorded? Use `as_of`.
+
+Claude is handed all 17 GALAHAD tools via `get_tool_schemas()` and runs
+an agent loop: for each `tool_use` in the response, the script calls
+`adapter.handle_tool_call(name, args)`, serializes the JSON result
+back as a `tool_result` block, and continues until Claude emits
+`end_turn`. The second question specifically exercises the bitemporal
+distinction that makes GALAHAD structurally different from a plain
+event store — "what was true in the world" vs "what the system knew."
+
+```bash
+# Dry run: verifies the full GALAHAD + adapter + Python path
+# without an API key (smoke-tests explain, as_of replay, find_related).
+PYTHONPATH=build python3 examples/anthropic_demo.py
+
+# Real run:
+pip install anthropic
+export ANTHROPIC_API_KEY=sk-...
+PYTHONPATH=build python3 examples/anthropic_demo.py
+```
+
+The dry-run mode is the important part for CI and for anyone who
+wants to verify the demo works before spending tokens on it — no API
+key needed, prints the three smoke assertions, exits cleanly.
+
 ## API surface
 
 ### Mutation
@@ -548,7 +582,8 @@ expressible in any single library in the categories above.
 - Confidence propagation through causal chains
 - `pip`-installable Python package with wheels (the bindings exist; we just
   need a `pyproject.toml` + CI wheels)
-- Framework-specific integrations (`galahad-anthropic-agent`, `galahad-langchain`)
+- More framework-specific examples alongside `examples/anthropic_demo.py`
+  (LangChain, OpenAI function-calling, tool-use harness for local models)
 
 **Longer term**
 - Concurrent readers / writer-exclusion
