@@ -229,6 +229,32 @@ void TemporalCore::rebuildCausalIndices() const {
             }
         }
     }
+
+    // Dedupe both adjacency maps in place, preserving first-occurrence
+    // order. Duplicates arise when promoteBranch appends a main-branch
+    // copy of a projection: the rebuild then sees the same (parent, child)
+    // edge twice — once from the original-branch version, once from the
+    // promoted main copy — and pushes into reverseCausal[parent] (and
+    // causalGraph[child]) twice. Discovered when Claude Opus 4.6 ran the
+    // traffic-light demo and get_effects('t1_infer') returned
+    // ['fut_wait_for_green', 'fut_wait_for_green']. Fixing at the index
+    // level so every downstream consumer (getCauses, getEffects,
+    // getAncestors, getDescendants, adapter tool calls, Python bindings)
+    // sees deduplicated neighbor lists automatically.
+    auto dedupe_preserving_order = [](std::vector<InternalEventId>& v) {
+        std::unordered_set<InternalEventId> seen;
+        auto it = v.begin();
+        while (it != v.end()) {
+            if (!seen.insert(*it).second) {
+                it = v.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+    for (auto& [_, causes] : causalGraph) dedupe_preserving_order(causes);
+    for (auto& [_, children] : reverseCausal) dedupe_preserving_order(children);
+
     dirtyCausal = false;
 }
 

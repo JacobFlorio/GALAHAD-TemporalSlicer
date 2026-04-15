@@ -265,6 +265,56 @@ int main() {
         assert(cf_core.queryRange({t0, t0+ms(1000)}).size() == orig_size);
     }
 
-    std::cout << "test_engine: OK (counterfactual: whyNot + explainWith + clone)\n";
+    // ---------- regression: post-promotion duplicate neighbors ----------
+    //
+    // Discovered by Claude Opus 4.6 in the v0.2.1 traffic-light demo run:
+    // get_effects('t1_infer') returned ['fut_wait_for_green',
+    // 'fut_wait_for_green']. The cause: promoteBranch appends a main-
+    // branch copy of each projection on the promoted branch, so
+    // rebuildCausalIndices sees two stored events with the same id and
+    // pushes into reverseCausal[parent] twice. Fixed in 0.2.2 by
+    // deduping both adjacency maps in place at the end of the rebuild.
+    {
+        TemporalCore c;
+        const auto t0 = Clock::now();
+
+        c.addEvent({"cause", t0, t0+ms(5), t0, "x", {}, {}});
+
+        TemporalEvent proj;
+        proj.id = "pred";
+        proj.valid_from = t0+ms(10);
+        proj.valid_to   = t0+ms(20);
+        proj.recorded_at = t0+ms(5);
+        proj.type = "projected";
+        proj.causal_links = {"cause"};
+        proj.branch_id = "fork";
+        proj.confidence = 0.8;
+        c.addProjection(proj);
+
+        // Sanity: before promotion, one effect, one cause.
+        c.buildCausalGraph();
+        auto effs_before = c.getEffects("cause");
+        assert(effs_before.size() == 1 && effs_before[0] == "pred");
+        auto causes_before = c.getCauses("pred");
+        assert(causes_before.size() == 1 && causes_before[0] == "cause");
+
+        // After promoteBranch, reverseCausal has two entries for "pred"
+        // (original-branch version + main-branch copy). Before the 0.2.2
+        // fix, getEffects returned both — duplicating the id. After the
+        // fix, index-level dedupe squashes it back to one.
+        c.promoteBranch("fork");
+        auto effs_after = c.getEffects("cause");
+        assert(effs_after.size() == 1);
+        assert(effs_after[0] == "pred");
+
+        // Same latent bug on the forward edge: causalGraph["pred"] gets
+        // two entries for "cause" after promotion. Verify getCauses is
+        // also deduplicated.
+        auto causes_after = c.getCauses("pred");
+        assert(causes_after.size() == 1);
+        assert(causes_after[0] == "cause");
+    }
+
+    std::cout << "test_engine: OK (counterfactual + promotion dedupe)\n";
     return 0;
 }
