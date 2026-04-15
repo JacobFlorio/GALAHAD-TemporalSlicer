@@ -87,9 +87,27 @@ def mk(id_, start, end, recorded, type_, data=None, links=None, branch="main"):
     return e
 
 
-# Canonical GALAHAD demo trace. The late-arriving `act` is the point:
-# it *happened* at t0+20ms but was *recorded_at* t0+200ms, so an honest
-# bitemporal query at as_of=t0+100ms has no way to know it happened.
+# Canonical GALAHAD demo trace. Four ground-truth events on main plus
+# two competing projection branches plus a refutation, so the scenario
+# exercises all four question shapes we want Claude to walk through:
+#
+#   main timeline (ground truth):
+#     perceive [t0, t0+5ms]                  obs=door_open
+#     infer    [t0+5ms, t0+15ms]             why=wind
+#     decide   [t0+15ms, t0+20ms]            choose=close
+#     act      [t0+20ms, t0+30ms]            do=close
+#         ^ late-arriving: recorded_at = t0+200ms.
+#           A bitemporal query at as_of=t0+100ms won't see this.
+#
+#   projection branches (what the agent predicted before acting):
+#     close_door / fut_close  — confidence 0.7, depends on decide
+#     ignore     / fut_ignore — confidence 0.3, depends on decide  [REFUTED]
+#
+# The `ignore` branch is refuted to represent "the agent ruled out
+# inaction." This makes fut_ignore the counterfactual target: it was
+# once predicted, but the refutation means we're saying it didn't and
+# won't happen. why_not("fut_ignore") returns the ignore branch + the
+# would-have-been causal chain.
 core.add_event(mk("perceive", t0,           t0 + ms(5),  t0,
                   "perception", {"obs": "door_open"}))
 core.add_event(mk("infer",    t0 + ms(5),   t0 + ms(15), t0 + ms(5),
@@ -102,36 +120,81 @@ core.add_event(mk("act",      t0 + ms(20),  t0 + ms(30), t0 + ms(200),
                   "action",     {"do": "close"},
                   ["decide"]))
 
-print("GALAHAD populated with 4 events.")
+# Two competing projections at t0+15ms (the moment of decision).
+fut_close = mk("fut_close",
+               t0 + ms(20), t0 + ms(30), t0 + ms(15),
+               "projected_action", {"do": "close"},
+               ["decide"], branch="close_door")
+fut_close.confidence = 0.7
+core.add_projection(fut_close)
+
+fut_ignore = mk("fut_ignore",
+                t0 + ms(20), t0 + ms(30), t0 + ms(15),
+                "projected_action", {"do": "wait"},
+                ["decide"], branch="ignore")
+fut_ignore.confidence = 0.3
+core.add_projection(fut_ignore)
+
+# Observation confirms the agent closed the door, so the `ignore`
+# projection is refuted. fut_ignore still exists in GALAHAD's memory,
+# but it's marked as "this was once predicted and then ruled out" —
+# which is exactly the counterfactual case why_not() is for.
+core.refute_branch("ignore")
+
+print("GALAHAD populated:")
+print("  main      : 4 events (perceive -> infer -> decide -> act)")
+print("  close_door: 1 projection (fut_close, confidence 0.7)")
+print("  ignore    : 1 projection (fut_ignore, confidence 0.3) [REFUTED]")
 print(f"Anchor time t0 = {t0.isoformat()}")
-print("Note: 'act' occurred at t0+20ms but was recorded at t0+200ms.\n")
+print("Note: 'act' occurred at t0+20ms but was recorded at t0+200ms.")
+print("Note: 'ignore' branch is refuted — fut_ignore is the counterfactual.\n")
 
 tools = adapter.get_tool_schemas()
 print(f"Registered {len(tools)} GALAHAD tools with Claude.")
 
-PROMPT = f"""I have a GALAHAD temporal reasoning engine populated with events from a
-small agent that observed an open door and chose to close it. The anchor
-time (t0) is {t0.isoformat()}.
+PROMPT = f"""I have a GALAHAD v0.2.0 temporal reasoning engine populated with events
+from a small agent that observed an open door and chose to close it.
+The anchor time (t0) is {t0.isoformat()}.
 
-Use the GALAHAD tools (get_ancestors, explain, get_event, query_range,
-etc.) to answer two questions and show your reasoning through the tool
-calls you make.
+The scenario already contains ground-truth events and projection
+branches — you do not need to add anything. Events on the `main` branch
+are the actual timeline. Events on the `close_door` branch are a
+projection that is still open. Events on the `ignore` branch are a
+projection that has been refuted (the agent ruled out inaction).
 
-1. Why did the event "act" happen? Walk through the causal chain using
-   `explain` and read back what you find.
+Use the GALAHAD tools to walk through FOUR question shapes and show
+your reasoning through the tool calls you make. Each question is
+designed to reach for a different part of the surface. Pick the tool
+you think fits best; do not just use the same tool four times.
 
-2. CRITICAL BITEMPORAL QUESTION: What would the system have believed at
-   exactly t0+100ms? Would it have known that "act" happened at that
-   transaction time? Use `explain` a second time with the `as_of`
-   parameter set to t0+100ms ({(t0 + ms(100)).isoformat()}) and compare
-   the result to question 1. The difference between the two answers is
-   the bitemporal distinction between "when something happened in the
-   world" (valid time) and "when the system learned of it" (transaction
-   time).
+1. BACKWARD CAUSAL — Why did the event "act" happen? Walk through the
+   causal chain.
 
-Call the tools step by step. Be concrete about which tool you chose and
-what it returned. Then give a clear natural-language summary of what
-you learned."""
+2. BITEMPORAL REPLAY — What would the system have believed at exactly
+   t0+100ms ({(t0 + ms(100)).isoformat()})? Would it have known that
+   "act" happened at that transaction time? Compare to question 1. The
+   difference between the two answers is the bitemporal distinction
+   between "when something happened in the world" (valid time) and
+   "when the system learned of it" (transaction time).
+
+3. COUNTERFACTUAL — What did the refuted `ignore` branch predict? The
+   projected event on that branch is called "fut_ignore". Ask the
+   engine what the refuted branch contained AND walk its would-have-
+   been causal chain. (Hint: there's a tool called `why_not` that
+   returns exactly this shape — the refuted-branch event + its causal
+   ancestry walked across all branches.)
+
+4. HYPOTHETICAL MUTATION — Suppose a different event "hyp_slam" had
+   been added, one that cites "decide" as its cause, with valid_from
+   around t0+25ms. What would its causal explanation look like if it
+   had happened, without actually committing it to the store? (Hint:
+   there's a tool called `explain_with` that clones the core, applies
+   a mutation, and runs explain against the fork.)
+
+After the four tool rounds, give a clear natural-language summary that
+articulates the difference between each question's shape — backward,
+bitemporal, counterfactual, hypothetical — in plain English. The
+summary is the artifact we care about."""
 
 # ----------------------------------------------------------------------
 # Dry run: verify GALAHAD + adapter work without calling the API
@@ -179,8 +242,42 @@ if DRY_RUN:
     assert r3["ok"] is True, r3
     print(f"  find_related('perceive', meets) -> {r3['result']}")
 
+    # Counterfactual smoke tests (new in v0.2.0)
+    r4 = adapter.handle_tool_call("why_not", {"id": "fut_ignore"})
+    assert r4["ok"] is True, r4
+    assert len(r4["result"]) == 1
+    assert r4["result"][0]["branch"] == "ignore"
+    wh_causes = [c["id"] for c in r4["result"][0]["would_have_been_causes"]]
+    print(f"  why_not('fut_ignore')           -> branch={r4['result'][0]['branch']}, "
+          f"causes={wh_causes}")
+
+    r5 = adapter.handle_tool_call("why_not", {"id": "act"})
+    assert r5["ok"] is True, r5
+    assert len(r5["result"]) == 0
+    print(f"  why_not('act')                  -> [] (actually happened)")
+
+    r6 = adapter.handle_tool_call("explain_with", {
+        "target_id": "hyp_slam",
+        "mutation": {
+            "id": "hyp_slam",
+            "valid_from": (t0 + ms(25)).isoformat(),
+            "valid_to":   (t0 + ms(35)).isoformat(),
+            "recorded_at": (t0 + ms(25)).isoformat(),
+            "type": "hypothetical_action",
+            "data": {"do": "slam"},
+            "causal_links": ["decide"],
+        },
+    })
+    assert r6["ok"] is True, r6
+    hyp_causes = [c["id"] for c in r6["result"]["causes"]]
+    print(f"  explain_with(hyp_slam)          -> causes={hyp_causes}")
+    # Real core must not contain the hypothetical event
+    r7 = adapter.handle_tool_call("get_event", {"id": "hyp_slam"})
+    assert r7["ok"] is True and r7["result"] is None, \
+        "hyp_slam must not exist in the real core after explain_with"
+
     print()
-    print("Dry run complete. GALAHAD + adapter are wired end-to-end.")
+    print("Dry run complete. GALAHAD + adapter + counterfactuals wired end-to-end.")
     print("Set ANTHROPIC_API_KEY and re-run to see Claude reason over it.")
     sys.exit(0)
 
