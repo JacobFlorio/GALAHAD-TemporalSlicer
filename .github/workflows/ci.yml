@@ -42,7 +42,7 @@ jobs:
       run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
     - name: Build all targets
-      run: cmake --build build --parallel
+      run: cmake --build build --parallel --config Release
 
     - name: Run C++ test binaries
       run: ctest --test-dir build --build-config Release --output-on-failure --no-tests=error
@@ -60,5 +60,5 @@ jobs:
       # Run from a neutral directory so `import galahad` hits
       # site-packages rather than the build/ tree, mirroring a real
       # end-user install.
-      working-directory: /tmp
+      working-directory: ${{ runner.temp }}
       run: python ${{ github.workspace }}/python/test_galahad.py
