@@ -431,7 +431,7 @@ PYBIND11_MODULE(galahad, m) {
           py::arg("elapsed_secs"),
           py::arg("observation_count"),
           py::arg("config") = DecayConfig{},
-          "Compute decayed confidence using ConsciousMem2 exponential model.");
+          "Compute decayed confidence using GALAHAD's exponential decay model.");
 
     // ---- AnomalyDetector ----
     py::class_<AnomalyDetector>(m, "AnomalyDetector")

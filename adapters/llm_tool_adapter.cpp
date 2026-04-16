@@ -611,7 +611,7 @@ json LLMToolAdapter::getToolSchemas() const {
         "detect_confidence_decay",
         "Find events whose confidence, after applying exponential decay from "
         "recorded_at to the given 'now' time, falls below a threshold. Uses "
-        "ConsciousMem2's decay model: exp(-ln(2)/half_life * elapsed) + "
+        "GALAHAD's decay model: exp(-ln(2)/half_life * elapsed) + "
         "reinforcement. Answers 'what information is going stale?'",
         json{
             {"start", tsProp("Window start")},
@@ -628,7 +628,7 @@ json LLMToolAdapter::getToolSchemas() const {
         "compute_decay",
         "Compute the decayed confidence value for given elapsed time and "
         "observation count. Pure function — does not query the store. Uses "
-        "ConsciousMem2 model: exp(-ln(2)/half_life * elapsed) + bonus * "
+        "GALAHAD decay model: exp(-ln(2)/half_life * elapsed) + bonus * "
         "ln(1 + observations). Returns a single number between floor and 1.0.",
         json{
             {"elapsed_secs", numProp("Seconds since last observation")},

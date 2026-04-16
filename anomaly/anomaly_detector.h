@@ -9,7 +9,7 @@
 
 namespace galahad {
 
-// Confidence-decay model ported from ConsciousMem2.
+// Confidence-decay model.
 // Exponential decay with configurable half-life, logarithmic reinforcement
 // from repeated observations, and a floor that prevents full forgetting.
 struct DecayConfig {
@@ -19,7 +19,7 @@ struct DecayConfig {
     double max_confidence = 1.0;
 };
 
-// Pre-built domain presets matching ConsciousMem2.
+// Pre-built domain presets.
 inline DecayConfig securityDecay()    { return {86400.0,   0.20, 0.05, 1.0}; }
 inline DecayConfig agricultureDecay() { return {604800.0,  0.10, 0.10, 1.0}; }
 inline DecayConfig financeDecay()     { return {7776000.0, 0.05, 0.10, 1.0}; }

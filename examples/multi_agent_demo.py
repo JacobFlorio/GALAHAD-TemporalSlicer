@@ -7,7 +7,7 @@ scenario forces cross-agent projection interaction, shared causal
 reasoning, and counterfactual queries across agent boundaries.
 
 This is the first demo to exercise the v0.3.0 anomaly detection
-(ConsciousMem2 confidence decay + co-occurrence) alongside the full
+(confidence decay + co-occurrence) alongside the full
 existing surface (bitemporal replay, Allen relations, branching
 projections, counterfactuals).
 

@@ -45,7 +45,7 @@ Four layers, bottom-up:
 ```
 python/      galahad             — pybind11 bindings: full C++ surface from Python
 adapters/    LLMToolAdapter      — 28 JSON tool-call surfaces for any LLM framework
-anomaly/     AnomalyDetector     — ConsciousMem2-style anomaly rules + confidence decay
+anomaly/     AnomalyDetector     — temporal anomaly rules + confidence decay
 persistence/ TemporalPersistence — binary save/load with full round-trip
 engine/      TemporalEngine      — high-level reasoning: explain(), whatHappenedDuring(), knobs
 core/        TemporalCore        — the substrate: bitemporal events, causal DAG, Allen algebra,
@@ -167,8 +167,7 @@ bringing the adapter's vendor-neutral tool count to **28**.
 ### What's in the anomaly detector (v0.3.0)
 
 - **`AnomalyDetector`** — read-only queries over a `TemporalCore`, composing existing
-  primitives (queryRange, Allen relations) into higher-level anomaly rules ported from
-  [ConsciousMem2](https://github.com/JacobFlorio/ConsciousMem2). Five detectors:
+  primitives (queryRange, Allen relations) into higher-level anomaly rules. Five detectors:
   - **`detectMissing`** — entity present in baseline window but absent in current window.
   - **`detectFrequencyAnomaly`** — event rate spike or drop between baseline and current.
   - **`detectCoOccurrenceBreak`** — types that temporally co-occur in baseline (Allen overlap)
@@ -176,7 +175,7 @@ bringing the adapter's vendor-neutral tool count to **28**.
   - **`detectLoitering`** — events whose valid interval exceeds a duration threshold.
   - **`detectConfidenceDecay`** — events whose confidence, after exponential decay from
     `recorded_at` to a given time, falls below a threshold.
-- **`computeDecay`** — standalone decay function using ConsciousMem2's model:
+- **`computeDecay`** — standalone decay function using GALAHAD's exponential model:
   `exp(-ln(2)/half_life * elapsed) + bonus * ln(1 + observations)`, clamped to `[floor, 1.0]`.
 - **Domain presets** — `securityDecay` (1-day half-life), `agricultureDecay` (7 days),
   `financeDecay` (90 days), `networkDecay` (2 days).
