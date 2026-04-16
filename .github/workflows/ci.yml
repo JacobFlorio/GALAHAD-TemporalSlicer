@@ -19,16 +19,15 @@ jobs:
       fail-fast: false
       matrix:
         # Ubuntu is the primary target and runs across Python versions to
-        # catch any 3.x-specific issues in the pybind11 binding. macOS is
-        # tested on one version to verify the POSIX time APIs used by the
-        # adapter (strptime/gmtime_r/timegm) still compile there. Windows
-        # is intentionally excluded until the adapter is ported to CRT
-        # time APIs — a known follow-up item.
+        # catch any 3.x-specific issues in the pybind11 binding. macOS
+        # and Windows are tested on one version each to verify the
+        # cross-platform time helpers compile and behave correctly.
         include:
           - { os: ubuntu-latest,  python-version: "3.10" }
           - { os: ubuntu-latest,  python-version: "3.11" }
           - { os: ubuntu-latest,  python-version: "3.12" }
           - { os: macos-latest,   python-version: "3.11" }
+          - { os: windows-latest, python-version: "3.11" }
 
     steps:
     - name: Checkout
@@ -46,13 +45,10 @@ jobs:
       run: cmake --build build --parallel
 
     - name: Run C++ test binaries
-      run: |
-        ./build/test_temporal
-        ./build/test_engine
-        ./build/test_adapter
-        ./build/test_persistence
+      run: ctest --test-dir build --build-config Release --output-on-failure --no-tests=error
 
     - name: Bench smoke check (first 20 lines only)
+      if: runner.os != 'Windows'
       run: ./build/bench_temporal | head -20
 
     - name: Install Python package via pip
