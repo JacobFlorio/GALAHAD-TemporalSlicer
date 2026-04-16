@@ -4,6 +4,12 @@ project(GALAHAD_TemporalSlicer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Suppress MSVC deprecation warnings for standard C functions (snprintf,
+# strftime, etc.) that are perfectly safe in our usage.
+if(MSVC)
+    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+endif()
+
 # Default to Release if the user didn't explicitly pick a build type.
 # Debug builds still work with `cmake -DCMAKE_BUILD_TYPE=Debug`.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -59,17 +65,23 @@ target_link_libraries(temporal_persistence PUBLIC temporal_core)
 
 # ---- tests ----
 if(GALAHAD_BUILD_TESTS)
+    enable_testing()
+
     add_executable(test_temporal tests/test_temporal.cpp)
     target_link_libraries(test_temporal PRIVATE temporal_core)
+    add_test(NAME test_temporal COMMAND test_temporal)
 
     add_executable(test_engine tests/test_engine.cpp)
     target_link_libraries(test_engine PRIVATE temporal_engine)
+    add_test(NAME test_engine COMMAND test_engine)
 
     add_executable(test_adapter tests/test_adapter.cpp)
     target_link_libraries(test_adapter PRIVATE temporal_adapter)
+    add_test(NAME test_adapter COMMAND test_adapter)
 
     add_executable(test_persistence tests/test_persistence.cpp)
     target_link_libraries(test_persistence PRIVATE temporal_persistence temporal_engine)
+    add_test(NAME test_persistence COMMAND test_persistence)
 endif()
 
 # ---- bench ----

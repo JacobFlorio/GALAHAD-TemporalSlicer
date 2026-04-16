@@ -9,11 +9,58 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#  include <iomanip>
+#  include <sstream>
+#endif
+
 using nlohmann::json;
 
 namespace galahad {
 
 namespace {
+
+// ---------- Cross-platform time helpers ----------
+//
+// POSIX provides gmtime_r, timegm, and strptime; MSVC does not.
+// These thin wrappers keep the rest of the file platform-neutral.
+
+inline std::tm* portable_gmtime(const std::time_t* t, std::tm* result) {
+#ifdef _WIN32
+    // gmtime_s has swapped parameter order vs gmtime_r and returns errno_t.
+    if (gmtime_s(result, t) != 0) return nullptr;
+    return result;
+#else
+    return gmtime_r(t, result);
+#endif
+}
+
+inline std::time_t portable_timegm(std::tm* tm) {
+#ifdef _WIN32
+    return _mkgmtime(tm);
+#else
+    return timegm(tm);
+#endif
+}
+
+// Minimal strptime replacement for MSVC — parses exactly the format
+// "%Y-%m-%dT%H:%M:%S" and returns a pointer past the consumed input.
+inline const char* portable_strptime(const char* s, std::tm* tm) {
+#ifdef _WIN32
+    std::istringstream ss(s);
+    ss >> std::get_time(tm, "%Y-%m-%dT%H:%M:%S");
+    if (ss.fail()) return nullptr;
+    // std::get_time reports how many chars it consumed via tellg().
+    auto pos = ss.tellg();
+    if (pos < 0) {
+        // tellg() == -1 means the entire string was consumed.
+        return s + std::strlen(s);
+    }
+    return s + static_cast<std::size_t>(pos);
+#else
+    return strptime(s, "%Y-%m-%dT%H:%M:%S", tm);
+#endif
+}
 
 // ---------- TimePoint <-> string / int64 ----------
 
@@ -23,7 +70,7 @@ std::string tpToIso(TimePoint tp) {
         std::chrono::duration_cast<std::chrono::milliseconds>(tp - secs).count();
     std::time_t t = Clock::to_time_t(secs);
     std::tm tm{};
-    gmtime_r(&t, &tm);
+    portable_gmtime(&t, &tm);
     char iso[32];
     std::strftime(iso, sizeof(iso), "%Y-%m-%dT%H:%M:%S", &tm);
     char out[64];
@@ -49,9 +96,9 @@ TimePoint tpFromNanos(std::int64_t ns) {
 
 TimePoint tpFromIso(const std::string& s) {
     std::tm tm{};
-    const char* res = strptime(s.c_str(), "%Y-%m-%dT%H:%M:%S", &tm);
+    const char* res = portable_strptime(s.c_str(), &tm);
     if (!res) throw std::runtime_error("bad ISO timestamp: " + s);
-    auto secs = Clock::from_time_t(timegm(&tm));
+    auto secs = Clock::from_time_t(portable_timegm(&tm));
     long ms_part = 0;
     if (*res == '.') {
         ++res;
