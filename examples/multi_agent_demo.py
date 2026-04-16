@@ -50,7 +50,7 @@ except ImportError:
     HAS_ANTHROPIC = False
 
 MODEL = "claude-opus-4-6"
-MAX_TURNS = 16
+MAX_TURNS = 25
 API_KEY = os.getenv("ANTHROPIC_API_KEY")
 DRY_RUN = bool(os.getenv("GALAHAD_DEMO_DRY_RUN")) or not (HAS_ANTHROPIC and API_KEY)
 
@@ -155,22 +155,32 @@ core.add_event(mk("cross_correlation", t0 + sec(20), t0 + sec(25), t0 + sec(20),
                                  "implication": "ddos_may_be_cover_for_breach"},
                    ["net_infer_ddos", "sec_infer_breach"]))
 
-# --- Decisions ---
-# After cross-correlation, the ratelimit projection is refuted (too weak
-# against an active breach). Scale-up is also questionable if the traffic
-# is attacker-generated. Quarantine is the favored response.
+# --- Decision point ---
+# After cross-correlation concludes DDoS is cover for breach:
+#   - ratelimit refuted (too weak against active breach)
+#   - scale refuted (scaling attacker traffic is counterproductive)
+#   - quarantine promoted to ground truth (correct response to breach)
 core.refute_branch("ratelimit")
+core.refute_branch("scale")
+core.promote_branch("quarantine")
+
+# Post-promotion: the quarantine action becomes ground truth on main.
+# A late-arriving confirmation event validates the decision.
+core.add_event(mk("confirm_quarantine", t0 + sec(35), t0 + sec(40), t0 + sec(35),
+                   "confirmation", {"agent": "joint", "result": "breach_contained",
+                                    "hosts_isolated": "webserver_01,db_primary"},
+                   ["cross_correlation"]))
 
 print("GALAHAD v0.3.0 Multi-Agent Scenario populated:")
 print("  Agent A (Network Ops):")
 print("    main: net_spike -> net_dns_flood -> net_infer_ddos")
-print("    branch 'scale':     fut_scale_up     (confidence 0.7)")
+print("    branch 'scale':     fut_scale_up     (confidence 0.7) [REFUTED]")
 print("    branch 'ratelimit': fut_ratelimit    (confidence 0.5) [REFUTED]")
 print("  Agent B (Security):")
 print("    main: sec_login -> sec_lateral -> sec_infer_breach")
-print("    branch 'quarantine': fut_quarantine  (confidence 0.8)")
+print("    branch 'quarantine': fut_quarantine  (confidence 0.8) [PROMOTED]")
 print("  Cross-agent:")
-print("    main: cross_correlation (cites both net_infer_ddos + sec_infer_breach)")
+print("    main: cross_correlation -> confirm_quarantine")
 print(f"  Anchor time t0 = {t0.isoformat()}")
 print()
 
@@ -183,50 +193,57 @@ temporal store:
 
 **Agent A (Network Ops)** observed a traffic spike and DNS flood,
 inferred a possible DDoS, and projected two futures: auto-scale
-(branch "scale", confidence 0.7) and edge rate-limiting (branch
-"ratelimit", confidence 0.5, now REFUTED).
+(branch "scale") and edge rate-limiting (branch "ratelimit"). Both
+are now REFUTED — scaling attacker traffic is counterproductive, and
+rate-limiting is too weak against an active breach.
 
 **Agent B (Security)** observed a suspicious admin login and lateral
 movement, inferred an active breach, and projected quarantine of
-compromised hosts (branch "quarantine", confidence 0.8).
+compromised hosts (branch "quarantine"). This branch has been
+PROMOTED to ground truth.
 
-**Cross-agent link**: A joint correlation event on main links both
-agents' inferences, concluding the DDoS may be cover for the breach.
-
-The ratelimit branch has been refuted (too weak against active breach).
+**Cross-agent link**: A joint correlation event links both agents'
+inferences, concluding the DDoS was cover for the breach. A
+confirmation event validates the quarantine decision.
 
 Anchor time t0 = {t0.isoformat()}.
 
 Use GALAHAD tools to investigate this scenario. Walk through these
-question shapes:
+question shapes, using the tool that fits each question best:
 
-1. **SHARED CAUSAL PICTURE** — What is the full causal graph? Start
-   from cross_correlation and walk backward through both agents' chains.
-   Show how two independent perception streams converge.
+1. **SHARED CAUSAL PICTURE** — Start from confirm_quarantine and walk
+   backward through the full causal graph. Show how two independent
+   perception streams converged into a joint decision.
 
-2. **PROJECTION INTERACTION** — List all active projections. Which
-   agent's projection conflicts with which? If quarantine is promoted,
-   does scale-up still make sense? Use explain_with to test.
+2. **COUNTERFACTUAL SWEEP** — Both scale and ratelimit were refuted.
+   Use why_not on both to see what each would have predicted. Compare
+   the would-have-been causal chains. Which refutation was more
+   consequential?
 
-3. **COUNTERFACTUAL** — What did the refuted ratelimit branch predict?
-   Use why_not to see what would have happened. Walk the would-have-been
-   causal chain.
+3. **BITEMPORAL REPLAY** — Query at as_of = {(t0 + sec(10)).isoformat()}.
+   At that transaction time, which agent knew what? Had the cross-
+   correlation been recorded? Had quarantine been promoted? Show how
+   the system's belief state evolved.
 
-4. **BITEMPORAL REPLAY** — Query at as_of = {(t0 + sec(10)).isoformat()}.
-   At that moment, which agent knew what? Had the cross-correlation been
-   recorded yet? Show how the picture differs from the current state.
+4. **ALLEN INTERVAL ANALYSIS** — The traffic spike and suspicious login
+   happen in overlapping intervals. Find all temporal co-occurrences
+   using Allen relations. What does the overlap pattern reveal about
+   attack coordination?
 
-5. **ALLEN INTERVAL ANALYSIS** — Which events temporally overlap? The
-   traffic spike and suspicious login happen in overlapping intervals.
-   Find them using Allen relations. What does this co-occurrence mean
-   for the incident timeline?
+5. **ANOMALY DETECTION** — Use the new v0.3.0 anomaly tools:
+   - detect_frequency_anomaly: compare baseline (t0 to t0+10s) vs
+     current (t0+10s to t0+25s) — is there a spike?
+   - detect_co_occurrence_break: do perception events that co-occurred
+     in baseline stop co-occurring in a later window?
+   - compute_decay: what is the confidence of the original net_spike
+     event after 2 days with the network decay preset (172800s half-life)?
 
-After the tool rounds, synthesize a natural-language incident report
-that a NOC manager could act on. The report should name the moment of
-commitment (when the agents' independent streams converged into a
-joint conclusion) and recommend whether to promote the quarantine
-branch or the scale branch — with reasoning grounded in the causal
-and counterfactual evidence you gathered."""
+After the tool rounds, synthesize a **full incident report** for a
+NOC manager. The report must:
+- Name the moment of commitment (when streams converged)
+- Explain why quarantine was promoted over scale/ratelimit
+- Ground every claim in specific tool results
+- Include the confidence decay projection for ongoing monitoring"""
 
 # ----------------------------------------------------------------------
 # Dry run
@@ -252,67 +269,82 @@ if DRY_RUN:
     print()
     print("Smoke-testing the GALAHAD tool dispatch path directly:")
 
-    # 1. Shared causal picture: explain cross_correlation
-    r1 = adapter.handle_tool_call("explain", {"id": "cross_correlation"})
+    # 1. Shared causal picture: explain confirm_quarantine
+    r1 = adapter.handle_tool_call("explain", {"id": "confirm_quarantine"})
     assert r1["ok"] is True, r1
     cause_ids = [c["id"] for c in r1["result"]["causes"]]
-    print(f"  explain('cross_correlation')    -> {len(cause_ids)} causes: {cause_ids}")
-    # Should trace back through both agents' chains.
-    assert "net_infer_ddos" in cause_ids or "sec_infer_breach" in cause_ids
+    print(f"  explain('confirm_quarantine')   -> {len(cause_ids)} causes: {cause_ids}")
+    assert "cross_correlation" in cause_ids
 
-    # 2. Projections: list active projections
+    # 2. Projections: all refuted or promoted — no active projections
     r2 = adapter.handle_tool_call("get_projections", {})
     assert r2["ok"] is True, r2
     proj_ids = [p["id"] for p in r2["result"]]
     print(f"  get_projections()               -> {proj_ids}")
-    assert "fut_ratelimit" not in proj_ids  # refuted branch filtered out
 
-    # 3. Counterfactual: why_not on the refuted ratelimit projection
-    r3 = adapter.handle_tool_call("why_not", {"id": "fut_ratelimit"})
-    assert r3["ok"] is True, r3
-    assert len(r3["result"]) == 1
-    assert r3["result"][0]["branch"] == "ratelimit"
-    wh_causes = [c["id"] for c in r3["result"][0]["would_have_been_causes"]]
-    print(f"  why_not('fut_ratelimit')        -> branch=ratelimit, "
-          f"causes={wh_causes}")
+    # 3. Counterfactual: why_not on both refuted projections
+    r3a = adapter.handle_tool_call("why_not", {"id": "fut_ratelimit"})
+    assert r3a["ok"] is True, r3a
+    assert len(r3a["result"]) == 1
+    assert r3a["result"][0]["branch"] == "ratelimit"
+    wh_a = [c["id"] for c in r3a["result"][0]["would_have_been_causes"]]
+    print(f"  why_not('fut_ratelimit')        -> branch=ratelimit, causes={wh_a}")
+
+    r3b = adapter.handle_tool_call("why_not", {"id": "fut_scale_up"})
+    assert r3b["ok"] is True, r3b
+    assert len(r3b["result"]) == 1
+    assert r3b["result"][0]["branch"] == "scale"
+    wh_b = [c["id"] for c in r3b["result"][0]["would_have_been_causes"]]
+    print(f"  why_not('fut_scale_up')         -> branch=scale, causes={wh_b}")
 
     # 4. Bitemporal replay at t0+10s
     as_of_iso = (t0 + sec(10)).isoformat()
-    r4 = adapter.handle_tool_call("explain", {"id": "cross_correlation",
-                                              "as_of": as_of_iso})
+    r4 = adapter.handle_tool_call("what_happened_during",
+                                  {"start": t0.isoformat(),
+                                   "end": (t0 + sec(60)).isoformat(),
+                                   "as_of": as_of_iso})
     assert r4["ok"] is True, r4
-    past_causes = [c["id"] for c in r4["result"]["causes"]]
-    print(f"  explain('cross_correlation', as_of=t0+10s) -> {len(past_causes)} causes: {past_causes}")
-    # cross_correlation was recorded at t0+20s, so at t0+10s it shouldn't exist yet.
-    assert len(past_causes) == 0
+    past_ids = [e["id"] for e in r4["result"]]
+    print(f"  what_happened_during(as_of=t0+10s) -> {past_ids}")
+    assert "cross_correlation" not in past_ids  # not recorded yet
 
     # 5. Allen: find events overlapping with net_spike
     r5 = adapter.handle_tool_call("find_related",
-                                  {"id": "net_spike", "relation": "overlapped_by"})
+                                  {"id": "net_spike", "relation": "overlaps"})
     assert r5["ok"] is True, r5
-    print(f"  find_related('net_spike', overlapped_by) -> {r5['result']}")
+    print(f"  find_related('net_spike', overlaps)      -> {r5['result']}")
 
-    # Also test overlaps direction
-    r5b = adapter.handle_tool_call("find_related",
-                                   {"id": "net_spike", "relation": "overlaps"})
-    print(f"  find_related('net_spike', overlaps)      -> {r5b['result']}")
+    # 6. Anomaly tools via adapter (new in v0.3.0)
+    r6a = adapter.handle_tool_call("detect_frequency_anomaly", {
+        "baseline_start": t0.isoformat(),
+        "baseline_end": (t0 + sec(10)).isoformat(),
+        "current_start": (t0 + sec(10)).isoformat(),
+        "current_end": (t0 + sec(25)).isoformat(),
+    })
+    assert r6a["ok"] is True, r6a
+    print(f"  detect_frequency_anomaly()      -> {len(r6a['result'])} anomalies")
+    for a in r6a["result"]:
+        print(f"    {a['type']}: {a['description'][:70]}...")
 
-    # 6. Anomaly detection: co-occurrence break smoke test
-    baseline = galahad.TimeWindow(t0, t0 + sec(20))
-    current = galahad.TimeWindow(t0 + sec(50), t0 + sec(80))
-    co_results = detector.detect_co_occurrence_break(baseline, current, 1)
-    print(f"  detect_co_occurrence_break()    -> {len(co_results)} breaks")
-    for cr in co_results[:3]:
-        print(f"    {cr.description[:80]}...")
+    r6b = adapter.handle_tool_call("compute_decay", {
+        "elapsed_secs": 172800.0,
+        "observation_count": 1,
+        "half_life_secs": 172800.0,
+    })
+    assert r6b["ok"] is True, r6b
+    print(f"  compute_decay(2d, 1 obs, 2d hl) -> {r6b['result']:.4f}")
 
-    # 7. Confidence decay
-    decay_cfg = galahad.network_decay()
-    decay_results = detector.detect_confidence_decay(
-        galahad.TimeWindow(t0, t0 + sec(60)),
-        t0 + timedelta(days=3),  # 3 days later
-        0.5,
-        decay_cfg)
-    print(f"  detect_confidence_decay(3d)     -> {len(decay_results)} decayed events")
+    r6c = adapter.handle_tool_call("detect_co_occurrence_break", {
+        "baseline_start": t0.isoformat(),
+        "baseline_end": (t0 + sec(20)).isoformat(),
+        "current_start": (t0 + sec(30)).isoformat(),
+        "current_end": (t0 + sec(50)).isoformat(),
+        "min_co_occurrences": 1,
+    })
+    assert r6c["ok"] is True, r6c
+    print(f"  detect_co_occurrence_break()    -> {len(r6c['result'])} breaks")
+    for b in r6c["result"][:3]:
+        print(f"    {b['description'][:80]}...")
 
     print()
     print("Dry run complete. Full multi-agent stack wired end-to-end.")
@@ -335,7 +367,7 @@ for turn in range(MAX_TURNS):
     print(f"\n--- Turn {turn + 1} ---")
     response = client.messages.create(
         model=MODEL,
-        max_tokens=4096,
+        max_tokens=8192,
         tools=tools,
         messages=messages,
     )

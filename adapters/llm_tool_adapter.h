@@ -1,6 +1,7 @@
 #pragma once
 #include "../core/temporal_core.h"
 #include "../engine/temporal_engine.h"
+#include "../anomaly/anomaly_detector.h"
 
 #include <nlohmann/json.hpp>
 #include <string>

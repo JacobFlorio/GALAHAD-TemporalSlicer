@@ -224,6 +224,43 @@ json boolProp(const std::string& desc, bool dflt) {
     return json{{"type", "boolean"}, {"description", desc}, {"default", dflt}};
 }
 
+json numProp(const std::string& desc) {
+    return json{{"type", "number"}, {"description", desc}};
+}
+
+json numProp(const std::string& desc, double dflt) {
+    return json{{"type", "number"}, {"description", desc}, {"default", dflt}};
+}
+
+json intProp(const std::string& desc, int dflt) {
+    return json{{"type", "integer"}, {"description", desc}, {"default", dflt}};
+}
+
+std::string anomalyTypeStr(AnomalyType t) {
+    switch (t) {
+    case AnomalyType::MissingEntity:     return "missing_entity";
+    case AnomalyType::FrequencySpike:    return "frequency_spike";
+    case AnomalyType::FrequencyDrop:     return "frequency_drop";
+    case AnomalyType::CoOccurrenceBreak: return "co_occurrence_break";
+    case AnomalyType::Loitering:         return "loitering";
+    case AnomalyType::ConfidenceDecay:   return "confidence_decay";
+    }
+    return "unknown";
+}
+
+json anomalyResultsToJson(const std::vector<AnomalyResult>& results) {
+    json arr = json::array();
+    for (const auto& r : results) {
+        arr.push_back(json{
+            {"type", anomalyTypeStr(r.type)},
+            {"severity", r.severity},
+            {"description", r.description},
+            {"involved_events", r.involved_events}
+        });
+    }
+    return arr;
+}
+
 json tsProp(const std::string& desc) {
     return json{{"type", "string"},
                 {"description", desc + " (ISO 8601 UTC or int64 ns)"}};
@@ -504,6 +541,104 @@ json LLMToolAdapter::getToolSchemas() const {
         },
         {"target_id", "mutation"}));
 
+    // ---------- Anomaly detection tools (v0.3.0) ----------
+
+    tools.push_back(tool(
+        "detect_missing",
+        "Detect entities present in a baseline window but absent in a current "
+        "window. Answers 'what stopped showing up?' Bitemporal and branch-aware.",
+        json{
+            {"entity_type", strProp("Event type to check for presence/absence")},
+            {"baseline_start", tsProp("Baseline window start")},
+            {"baseline_end", tsProp("Baseline window end")},
+            {"current_start", tsProp("Current window start")},
+            {"current_end", tsProp("Current window end")},
+            {"min_baseline_appearances", intProp("Min appearances in baseline to count", 2)},
+            {"as_of", tsProp("Transaction-time ceiling")},
+            {"branch", strProp("Branch filter")}
+        },
+        {"entity_type", "baseline_start", "baseline_end", "current_start", "current_end"}));
+
+    tools.push_back(tool(
+        "detect_frequency_anomaly",
+        "Compare event rate in a current window against a baseline window. "
+        "Fires on spikes (ratio > threshold) or drops (ratio < 1/threshold). "
+        "Answers 'is something happening more or less often than expected?'",
+        json{
+            {"baseline_start", tsProp("Baseline window start")},
+            {"baseline_end", tsProp("Baseline window end")},
+            {"current_start", tsProp("Current window start")},
+            {"current_end", tsProp("Current window end")},
+            {"spike_threshold", numProp("Ratio threshold for spike/drop detection", 3.0)},
+            {"event_type", strProp("Optional: only count events of this type")},
+            {"as_of", tsProp("Transaction-time ceiling")},
+            {"branch", strProp("Branch filter")}
+        },
+        {"baseline_start", "baseline_end", "current_start", "current_end"}));
+
+    tools.push_back(tool(
+        "detect_co_occurrence_break",
+        "Find pairs of event types that temporally co-occur in a baseline "
+        "window (Allen: overlap/during/contains/equals) but where one type "
+        "is present and the other absent in a current window. Answers 'what "
+        "normally happens together but is now missing its partner?'",
+        json{
+            {"baseline_start", tsProp("Baseline window start")},
+            {"baseline_end", tsProp("Baseline window end")},
+            {"current_start", tsProp("Current window start")},
+            {"current_end", tsProp("Current window end")},
+            {"min_co_occurrences", intProp("Min co-occurrences in baseline", 2)},
+            {"as_of", tsProp("Transaction-time ceiling")},
+            {"branch", strProp("Branch filter")}
+        },
+        {"baseline_start", "baseline_end", "current_start", "current_end"}));
+
+    tools.push_back(tool(
+        "detect_loitering",
+        "Find events whose valid interval (valid_to - valid_from) exceeds a "
+        "duration threshold. Answers 'what has been going on for too long?'",
+        json{
+            {"start", tsProp("Window start")},
+            {"end", tsProp("Window end")},
+            {"max_duration_secs", numProp("Max allowed event duration in seconds")},
+            {"event_type", strProp("Optional: only check events of this type")},
+            {"as_of", tsProp("Transaction-time ceiling")},
+            {"branch", strProp("Branch filter")}
+        },
+        {"start", "end", "max_duration_secs"}));
+
+    tools.push_back(tool(
+        "detect_confidence_decay",
+        "Find events whose confidence, after applying exponential decay from "
+        "recorded_at to the given 'now' time, falls below a threshold. Uses "
+        "ConsciousMem2's decay model: exp(-ln(2)/half_life * elapsed) + "
+        "reinforcement. Answers 'what information is going stale?'",
+        json{
+            {"start", tsProp("Window start")},
+            {"end", tsProp("Window end")},
+            {"now", tsProp("Current time for decay calculation")},
+            {"threshold", numProp("Confidence floor to flag", 0.3)},
+            {"half_life_secs", numProp("Decay half-life in seconds", 86400.0)},
+            {"as_of", tsProp("Transaction-time ceiling")},
+            {"branch", strProp("Branch filter")}
+        },
+        {"start", "end", "now"}));
+
+    tools.push_back(tool(
+        "compute_decay",
+        "Compute the decayed confidence value for given elapsed time and "
+        "observation count. Pure function — does not query the store. Uses "
+        "ConsciousMem2 model: exp(-ln(2)/half_life * elapsed) + bonus * "
+        "ln(1 + observations). Returns a single number between floor and 1.0.",
+        json{
+            {"elapsed_secs", numProp("Seconds since last observation")},
+            {"observation_count", intProp("Total observation count", 1)},
+            {"half_life_secs", numProp("Decay half-life in seconds", 86400.0)},
+            {"reinforcement_bonus", numProp("Bonus per ln(1+obs)", 0.15)},
+            {"floor", numProp("Minimum confidence floor", 0.05)}
+        },
+        {"elapsed_secs"}));
+
     tools.push_back(tool(
         "list_tools",
         "Return the full list of available tools with their input schemas.",
@@ -638,6 +773,83 @@ json LLMToolAdapter::handleToolCall(
                 {"completed_before_target", exp.completed_before_target}
             });
         }
+        // ---------- Anomaly detection handlers ----------
+
+        if (tool_name == "detect_missing") {
+            AnomalyDetector det(core_);
+            TimeWindow baseline{tpFromJson(args.at("baseline_start")),
+                                tpFromJson(args.at("baseline_end"))};
+            TimeWindow current{tpFromJson(args.at("current_start")),
+                               tpFromJson(args.at("current_end"))};
+            auto results = det.detectMissing(
+                args.at("entity_type").get<std::string>(),
+                baseline, current,
+                args.value("min_baseline_appearances", 2),
+                optTp(args, "as_of"), optStr(args, "branch"));
+            return ok(anomalyResultsToJson(results));
+        }
+        if (tool_name == "detect_frequency_anomaly") {
+            AnomalyDetector det(core_);
+            TimeWindow baseline{tpFromJson(args.at("baseline_start")),
+                                tpFromJson(args.at("baseline_end"))};
+            TimeWindow current{tpFromJson(args.at("current_start")),
+                               tpFromJson(args.at("current_end"))};
+            auto results = det.detectFrequencyAnomaly(
+                baseline, current,
+                args.value("spike_threshold", 3.0),
+                optStr(args, "event_type"),
+                optTp(args, "as_of"), optStr(args, "branch"));
+            return ok(anomalyResultsToJson(results));
+        }
+        if (tool_name == "detect_co_occurrence_break") {
+            AnomalyDetector det(core_);
+            TimeWindow baseline{tpFromJson(args.at("baseline_start")),
+                                tpFromJson(args.at("baseline_end"))};
+            TimeWindow current{tpFromJson(args.at("current_start")),
+                               tpFromJson(args.at("current_end"))};
+            auto results = det.detectCoOccurrenceBreak(
+                baseline, current,
+                args.value("min_co_occurrences", 2),
+                optTp(args, "as_of"), optStr(args, "branch"));
+            return ok(anomalyResultsToJson(results));
+        }
+        if (tool_name == "detect_loitering") {
+            AnomalyDetector det(core_);
+            TimeWindow w{tpFromJson(args.at("start")),
+                         tpFromJson(args.at("end"))};
+            auto results = det.detectLoitering(
+                w,
+                args.at("max_duration_secs").get<double>(),
+                optStr(args, "event_type"),
+                optTp(args, "as_of"), optStr(args, "branch"));
+            return ok(anomalyResultsToJson(results));
+        }
+        if (tool_name == "detect_confidence_decay") {
+            AnomalyDetector det(core_);
+            TimeWindow w{tpFromJson(args.at("start")),
+                         tpFromJson(args.at("end"))};
+            DecayConfig cfg;
+            cfg.half_life_secs = args.value("half_life_secs", 86400.0);
+            auto results = det.detectConfidenceDecay(
+                w,
+                tpFromJson(args.at("now")),
+                args.value("threshold", 0.3),
+                cfg,
+                optTp(args, "as_of"), optStr(args, "branch"));
+            return ok(anomalyResultsToJson(results));
+        }
+        if (tool_name == "compute_decay") {
+            DecayConfig cfg;
+            cfg.half_life_secs = args.value("half_life_secs", 86400.0);
+            cfg.reinforcement_bonus = args.value("reinforcement_bonus", 0.15);
+            cfg.floor = args.value("floor", 0.05);
+            double result = computeDecay(
+                args.at("elapsed_secs").get<double>(),
+                args.value("observation_count", 1),
+                cfg);
+            return ok(result);
+        }
+
         return err("unknown tool: " + tool_name);
     } catch (const std::exception& e) {
         return err(e.what());

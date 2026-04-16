@@ -54,7 +54,7 @@ add_library(temporal_adapter
 )
 target_include_directories(temporal_adapter PUBLIC adapters)
 target_link_libraries(temporal_adapter
-    PUBLIC temporal_core temporal_engine nlohmann_json::nlohmann_json
+    PUBLIC temporal_core temporal_engine temporal_anomaly nlohmann_json::nlohmann_json
 )
 
 add_library(temporal_anomaly
