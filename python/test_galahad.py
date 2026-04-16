@@ -134,7 +134,7 @@ def main():
     adapter = galahad.LLMToolAdapter(core, engine)
     schemas = adapter.get_tool_schemas()
     assert isinstance(schemas, list)
-    assert len(schemas) >= 15
+    assert len(schemas) >= 28
     names = {t["name"] for t in schemas}
     for required in ("explain", "add_event", "find_related",
                      "promote_branch", "now", "what_happened_during"):
@@ -344,8 +344,123 @@ def main():
 
     print("  counterfactual queries OK")
 
+    # ------------------------------------------------------------------
+    # Anomaly detection + confidence decay (new in 0.3.0).
+    # ------------------------------------------------------------------
+    print()
+    print("Anomaly detection (new in 0.3.0):")
+
+    a_core = galahad.TemporalCore()
+    at = datetime(2026, 4, 15, 3, 0, 0, tzinfo=timezone.utc)
+
+    def amk(id_, from_s, to_s, type_, links=None):
+        e = galahad.TemporalEvent()
+        e.id = id_
+        e.valid_from = at + timedelta(seconds=from_s)
+        e.valid_to = at + timedelta(seconds=to_s)
+        e.recorded_at = at + timedelta(seconds=from_s)
+        e.type = type_
+        e.causal_links = links or []
+        return e
+
+    # Baseline: server_a heartbeat appears 3 times (same ID, different intervals)
+    # server_b heartbeat appears once
+    for i in range(3):
+        e = galahad.TemporalEvent()
+        e.id = "server_a"
+        e.valid_from = at + timedelta(seconds=i * 10)
+        e.valid_to = at + timedelta(seconds=i * 10 + 5)
+        e.recorded_at = at + timedelta(seconds=i * 10)
+        e.type = "heartbeat"
+        a_core.add_event(e)
+    a_core.add_event(amk("server_b", 5, 10, "heartbeat"))
+    # Current: only server_b
+    e2 = galahad.TemporalEvent()
+    e2.id = "server_b"
+    e2.valid_from = at + timedelta(seconds=100)
+    e2.valid_to = at + timedelta(seconds=105)
+    e2.recorded_at = at + timedelta(seconds=100)
+    e2.type = "heartbeat"
+    a_core.add_event(e2)
+    # Long-running event for loitering
+    a_core.add_event(amk("long_conn", 0, 600, "connection"))
+
+    det = galahad.AnomalyDetector(a_core)
+
+    # MissingEntity: hb_a* appeared 3x in baseline, absent in current
+    baseline = galahad.TimeWindow(at, at + timedelta(seconds=30))
+    current = galahad.TimeWindow(at + timedelta(seconds=100),
+                                 at + timedelta(seconds=110))
+    missing = det.detect_missing("heartbeat", baseline, current, 2)
+    assert len(missing) == 1
+    assert missing[0].type == galahad.AnomalyType.MissingEntity
+    assert "server_a" in missing[0].involved_events
+    print(f"  detect_missing -> {len(missing)} missing entities OK")
+
+    # Loitering: long_conn is 600s, threshold 300s
+    full_window = galahad.TimeWindow(at, at + timedelta(seconds=700))
+    loiter = det.detect_loitering(full_window, 300.0, "connection")
+    assert len(loiter) == 1
+    assert loiter[0].type == galahad.AnomalyType.Loitering
+    assert loiter[0].involved_events == ["long_conn"]
+    print(f"  detect_loitering -> severity {loiter[0].severity:.2f} OK")
+
+    # DecayConfig + compute_decay
+    cfg = galahad.network_decay()
+    assert cfg.half_life_secs == 172800.0
+    c_fresh = galahad.compute_decay(0.0, 1, cfg)
+    assert abs(c_fresh - 1.0) < 0.01
+    c_old = galahad.compute_decay(172800.0, 0, cfg)
+    assert 0.4 < c_old < 0.6, f"expected ~0.5 at half-life, got {c_old}"
+    print(f"  compute_decay: fresh={c_fresh:.3f}, at_half_life={c_old:.3f} OK")
+
+    # ConfidenceDecay detection
+    decay_results = det.detect_confidence_decay(
+        full_window,
+        at + timedelta(days=5),  # 5 days later
+        0.3,
+        galahad.network_decay())
+    assert len(decay_results) > 0
+    for r in decay_results:
+        assert r.type == galahad.AnomalyType.ConfidenceDecay
+    print(f"  detect_confidence_decay -> {len(decay_results)} decayed OK")
+
+    # Anomaly tools via LLM adapter
+    a_engine = galahad.TemporalEngine(a_core)
+    a_adapter = galahad.LLMToolAdapter(a_core, a_engine)
+    schemas = a_adapter.get_tool_schemas()
+    tool_names = {t["name"] for t in schemas}
+    for required in ("detect_missing", "detect_frequency_anomaly",
+                     "detect_co_occurrence_break", "detect_loitering",
+                     "detect_confidence_decay", "compute_decay"):
+        assert required in tool_names, f"missing anomaly tool: {required}"
+
+    # compute_decay via adapter
+    dc = a_adapter.handle_tool_call("compute_decay", {
+        "elapsed_secs": 86400.0,
+        "observation_count": 3,
+        "half_life_secs": 86400.0,
+    })
+    assert dc["ok"] is True
+    assert 0.5 < dc["result"] < 0.9
+    print(f"  adapter compute_decay -> {dc['result']:.4f} OK")
+
+    # detect_loitering via adapter
+    dl = a_adapter.handle_tool_call("detect_loitering", {
+        "start": at.isoformat(),
+        "end": (at + timedelta(seconds=700)).isoformat(),
+        "max_duration_secs": 300.0,
+        "event_type": "connection",
+    })
+    assert dl["ok"] is True
+    assert len(dl["result"]) == 1
+    assert dl["result"][0]["type"] == "loitering"
+    print(f"  adapter detect_loitering JSON round-trip OK")
+
+    print("  anomaly detection + decay OK")
+
     print("\ntest_galahad: OK (core + engine + adapter + persistence + "
-          "timezone + counterfactuals)")
+          "timezone + counterfactuals + anomaly)")
 
 
 if __name__ == "__main__":

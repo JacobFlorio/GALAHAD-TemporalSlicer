@@ -40,11 +40,12 @@ branch identity. This is the structural moat.
 
 ## Architecture
 
-Three layers, bottom-up:
+Four layers, bottom-up:
 
 ```
 python/      galahad             — pybind11 bindings: full C++ surface from Python
-adapters/    LLMToolAdapter      — JSON tool-call surface for any LLM framework
+adapters/    LLMToolAdapter      — 28 JSON tool-call surfaces for any LLM framework
+anomaly/     AnomalyDetector     — ConsciousMem2-style anomaly rules + confidence decay
 persistence/ TemporalPersistence — binary save/load with full round-trip
 engine/      TemporalEngine      — high-level reasoning: explain(), whatHappenedDuring(), knobs
 core/        TemporalCore        — the substrate: bitemporal events, causal DAG, Allen algebra,
@@ -130,12 +131,11 @@ refutation set and bitemporal semantics. Two new operations expose this:
   the implicit copy constructor does a true deep copy with zero shared
   state. `explainWith` is a thin wrapper on top of this.
 
-The LLM adapter exposes two new JSON tools for counterfactuals:
-**`why_not`** and **`explain_with`**, bringing the adapter's vendor-
-neutral tool count to 19. An agent can now ask "what refuted branches
-predicted this event?" and "what would the causal chain look like if
-this mutation had happened?" with one tool call each, in addition to
-all the existing forward queries.
+The LLM adapter exposes counterfactual tools (**`why_not`**,
+**`explain_with`**) and anomaly detection tools (**`detect_missing`**,
+**`detect_frequency_anomaly`**, **`detect_co_occurrence_break`**,
+**`detect_loitering`**, **`detect_confidence_decay`**, **`compute_decay`**),
+bringing the adapter's vendor-neutral tool count to **28**.
 
 ### What's in the adapter
 
@@ -143,10 +143,14 @@ all the existing forward queries.
   reasoning API. Two entry points:
   - **`getToolSchemas()`** returns an Anthropic-style array of
     `{name, description, input_schema}` descriptors any LLM framework can register.
-    Seventeen tools: `now`, `add_event`, `add_projection`, `get_event`, `query_range`,
-    `explain`, `what_happened_during`, `get_ancestors`, `get_descendants`,
-    `get_causes`, `get_effects`, `find_related`, `promote_branch`, `refute_branch`,
-    `prune_branch`, `is_refuted`, and `list_tools`.
+    28 tools covering the full surface: core (`now`, `add_event`, `add_projection`,
+    `get_event`, `query_range`, `get_all_events`), reasoning (`explain`,
+    `what_happened_during`, `get_ancestors`, `get_descendants`, `get_causes`,
+    `get_effects`, `find_related`), branching (`promote_branch`, `refute_branch`,
+    `prune_branch`, `is_refuted`, `get_projections`, `get_refuted_branches`),
+    counterfactuals (`why_not`, `explain_with`), anomaly detection (`detect_missing`,
+    `detect_frequency_anomaly`, `detect_co_occurrence_break`, `detect_loitering`,
+    `detect_confidence_decay`, `compute_decay`), and introspection (`list_tools`).
   - **`handleToolCall(name, args)`** dispatches and returns a structured envelope:
     `{"ok": true, "result": ...}` on success or `{"ok": false, "error": "..."}` on
     failure. Every exception path is caught and surfaced as JSON — the LLM never
@@ -159,6 +163,25 @@ all the existing forward queries.
   `during`, `met_by`, etc.) so a model reaches for them by their natural names.
 - **Dependency:** `nlohmann/json v3.11.3`, pulled via CMake `FetchContent`. Zero
   manual setup.
+
+### What's in the anomaly detector (v0.3.0)
+
+- **`AnomalyDetector`** — read-only queries over a `TemporalCore`, composing existing
+  primitives (queryRange, Allen relations) into higher-level anomaly rules ported from
+  [ConsciousMem2](https://github.com/JacobFlorio/ConsciousMem2). Five detectors:
+  - **`detectMissing`** — entity present in baseline window but absent in current window.
+  - **`detectFrequencyAnomaly`** — event rate spike or drop between baseline and current.
+  - **`detectCoOccurrenceBreak`** — types that temporally co-occur in baseline (Allen overlap)
+    but where one is present and the other absent in current.
+  - **`detectLoitering`** — events whose valid interval exceeds a duration threshold.
+  - **`detectConfidenceDecay`** — events whose confidence, after exponential decay from
+    `recorded_at` to a given time, falls below a threshold.
+- **`computeDecay`** — standalone decay function using ConsciousMem2's model:
+  `exp(-ln(2)/half_life * elapsed) + bonus * ln(1 + observations)`, clamped to `[floor, 1.0]`.
+- **Domain presets** — `securityDecay` (1-day half-life), `agricultureDecay` (7 days),
+  `financeDecay` (90 days), `networkDecay` (2 days).
+- All detectors are **bitemporal** (`as_of`) and **branch-aware**, like every other
+  GALAHAD query.
 
 ## Quick start
 
@@ -586,15 +609,12 @@ Windows. The forward path is documented in the roadmap below.
   full Python surface end-to-end.
 
 **Not yet:**
-- Windows wheels (the adapter uses POSIX `strptime`/`gmtime_r`/`timegm`;
-  next focused session after the current stopping point)
 - Incremental/append-only persistence (current v1 format writes full
   snapshots)
 - Concurrency (single-threaded)
 - Topological sort in `explain` for general DAGs (current sort by
   `valid_from` is equivalent only for DAGs that respect causal-temporal
   ordering)
-- Confidence propagation (stored, not composed)
 - Interval-tree time index (current sorted-vector is fine until bench
   says otherwise)
 - Nested/hierarchical branches
@@ -767,14 +787,14 @@ CI and wheel publishing are driven by two GitHub Actions workflows in
 
 `ci.yml` runs on every push to `main` and every pull request. It builds
 the full C++ tree (core, engine, adapter, persistence, bench, all four
-test binaries), runs the four C++ test binaries end-to-end, runs the
+test binaries), runs the five C++ test binaries end-to-end, runs the
 bench as a smoke check, installs the package with `pip install .`, and
 runs the Python test suite against the *installed* module from a neutral
 working directory so `import galahad` hits site-packages and not the
 build tree. Matrix covers Python 3.10 / 3.11 / 3.12 on Ubuntu plus one
-run on macOS. Windows is intentionally skipped until the adapter's
-POSIX time APIs (`strptime`, `gmtime_r`, `timegm`) are ported to the
-MSVC CRT equivalents.
+run on macOS. Windows is tested on one version to verify the
+cross-platform time helpers (`portable_gmtime`, `portable_timegm`,
+`portable_strptime`) compile and pass on MSVC.
 
 ### Cutting a release
 

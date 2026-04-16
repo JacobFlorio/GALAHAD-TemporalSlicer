@@ -7,8 +7,8 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "galahad-temporal"
-version = "0.2.2"
-description = "Unified temporal reasoning core for AI: bitemporal storage, causal DAG, Allen interval algebra, branching projections, lifecycle, LLM tool-call adapter, binary persistence, and Python bindings."
+version = "0.3.0"
+description = "Unified temporal reasoning core for AI: bitemporal storage, causal DAG, Allen interval algebra, branching projections, anomaly detection, confidence decay, LLM tool-call adapter, binary persistence, and Python bindings."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -78,6 +78,7 @@ sdist.include = [
     "core/**",
     "engine/**",
     "adapters/**",
+    "anomaly/**",
     "persistence/**",
     "python/**",
     "tests/**",
