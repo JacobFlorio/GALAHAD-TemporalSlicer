@@ -35,6 +35,7 @@
 #include "temporal_core.h"
 #include "temporal_engine.h"
 #include "llm_tool_adapter.h"
+#include "anomaly_detector.h"
 #include "persistence.h"
 
 #include <nlohmann/json.hpp>
@@ -385,5 +386,91 @@ PYBIND11_MODULE(galahad, m) {
         .def_readonly_static("format_version",
                              &TemporalPersistence::kFormatVersion);
 
-    m.attr("__version__") = "0.2.2";
+    // ---- AnomalyType ----
+    py::enum_<AnomalyType>(m, "AnomalyType")
+        .value("MissingEntity",     AnomalyType::MissingEntity)
+        .value("FrequencySpike",    AnomalyType::FrequencySpike)
+        .value("FrequencyDrop",     AnomalyType::FrequencyDrop)
+        .value("CoOccurrenceBreak", AnomalyType::CoOccurrenceBreak)
+        .value("Loitering",         AnomalyType::Loitering)
+        .value("ConfidenceDecay",   AnomalyType::ConfidenceDecay);
+
+    // ---- AnomalyResult ----
+    py::class_<AnomalyResult>(m, "AnomalyResult")
+        .def_readonly("type",            &AnomalyResult::type)
+        .def_readonly("severity",        &AnomalyResult::severity)
+        .def_readonly("description",     &AnomalyResult::description)
+        .def_readonly("involved_events", &AnomalyResult::involved_events)
+        .def("__repr__", [](const AnomalyResult& r) {
+            return "<AnomalyResult severity=" + std::to_string(r.severity) +
+                   " desc='" + r.description.substr(0, 60) + "...'>";
+        });
+
+    // ---- DecayConfig ----
+    py::class_<DecayConfig>(m, "DecayConfig")
+        .def(py::init<>())
+        .def(py::init([](double hl, double rb, double fl, double mx) {
+            return DecayConfig{hl, rb, fl, mx};
+        }), py::arg("half_life_secs") = 86400.0,
+            py::arg("reinforcement_bonus") = 0.15,
+            py::arg("floor") = 0.05,
+            py::arg("max_confidence") = 1.0)
+        .def_readwrite("half_life_secs",      &DecayConfig::half_life_secs)
+        .def_readwrite("reinforcement_bonus",  &DecayConfig::reinforcement_bonus)
+        .def_readwrite("floor",               &DecayConfig::floor)
+        .def_readwrite("max_confidence",      &DecayConfig::max_confidence);
+
+    // Decay preset factory functions.
+    m.def("security_decay",    &securityDecay);
+    m.def("agriculture_decay", &agricultureDecay);
+    m.def("finance_decay",     &financeDecay);
+    m.def("network_decay",     &networkDecay);
+
+    // Standalone decay computation.
+    m.def("compute_decay", &computeDecay,
+          py::arg("elapsed_secs"),
+          py::arg("observation_count"),
+          py::arg("config") = DecayConfig{},
+          "Compute decayed confidence using ConsciousMem2 exponential model.");
+
+    // ---- AnomalyDetector ----
+    py::class_<AnomalyDetector>(m, "AnomalyDetector")
+        .def(py::init<const TemporalCore&>(),
+             py::arg("core"),
+             py::keep_alive<1, 2>())
+        .def("detect_missing", &AnomalyDetector::detectMissing,
+             py::arg("entity_type"),
+             py::arg("baseline"),
+             py::arg("current"),
+             py::arg("min_baseline_appearances") = 2,
+             py::arg("as_of")  = py::none(),
+             py::arg("branch") = py::none())
+        .def("detect_frequency_anomaly", &AnomalyDetector::detectFrequencyAnomaly,
+             py::arg("baseline"),
+             py::arg("current"),
+             py::arg("spike_threshold") = 3.0,
+             py::arg("event_type") = py::none(),
+             py::arg("as_of")  = py::none(),
+             py::arg("branch") = py::none())
+        .def("detect_co_occurrence_break", &AnomalyDetector::detectCoOccurrenceBreak,
+             py::arg("baseline"),
+             py::arg("current"),
+             py::arg("min_co_occurrences") = 2,
+             py::arg("as_of")  = py::none(),
+             py::arg("branch") = py::none())
+        .def("detect_loitering", &AnomalyDetector::detectLoitering,
+             py::arg("window"),
+             py::arg("max_duration_secs"),
+             py::arg("event_type") = py::none(),
+             py::arg("as_of")  = py::none(),
+             py::arg("branch") = py::none())
+        .def("detect_confidence_decay", &AnomalyDetector::detectConfidenceDecay,
+             py::arg("window"),
+             py::arg("now"),
+             py::arg("threshold") = 0.3,
+             py::arg("decay") = DecayConfig{},
+             py::arg("as_of")  = py::none(),
+             py::arg("branch") = py::none());
+
+    m.attr("__version__") = "0.3.0";
 }

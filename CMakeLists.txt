@@ -57,6 +57,12 @@ target_link_libraries(temporal_adapter
     PUBLIC temporal_core temporal_engine nlohmann_json::nlohmann_json
 )
 
+add_library(temporal_anomaly
+    anomaly/anomaly_detector.cpp
+)
+target_include_directories(temporal_anomaly PUBLIC anomaly)
+target_link_libraries(temporal_anomaly PUBLIC temporal_core)
+
 add_library(temporal_persistence
     persistence/persistence.cpp
 )
@@ -82,6 +88,10 @@ if(GALAHAD_BUILD_TESTS)
     add_executable(test_persistence tests/test_persistence.cpp)
     target_link_libraries(test_persistence PRIVATE temporal_persistence temporal_engine)
     add_test(NAME test_persistence COMMAND test_persistence)
+
+    add_executable(test_anomaly tests/test_anomaly.cpp)
+    target_link_libraries(test_anomaly PRIVATE temporal_anomaly)
+    add_test(NAME test_anomaly COMMAND test_anomaly)
 endif()
 
 # ---- bench ----
@@ -124,6 +134,7 @@ if(GALAHAD_BUILD_PYTHON)
         temporal_core
         temporal_engine
         temporal_adapter
+        temporal_anomaly
         temporal_persistence
         nlohmann_json::nlohmann_json
     )
